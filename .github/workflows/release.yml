@@ -58,7 +58,7 @@ jobs:
   # a failure here leaves the other downloads released).
   macos:
     needs: release
-    runs-on: macos-14
+    runs-on: macos-15                  # macos-14 is retired ("configuration not supported", 2026-11-18)
     steps:
       - uses: actions/checkout@v4
       - name: SDL3 (static library, universal arm64 + x86_64)
