@@ -1,6 +1,15 @@
 // MindMaze resources: the application icon (an original drawing, made by tools/art/make_icon.py).
 APPICON ICON "mindmaze.ico"
 
+// Open fonts (fonts/, SIL OFL / GUST licences) for systems without Tahoma, Arial, Times New Roman or Palatino
+// Linotype (Wine / Proton): win32_main.c loads them for this process only when a face is missing.
+FONT_SANS RCDATA "../../../fonts/LiberationSans-Regular.ttf"
+FONT_SANS_B RCDATA "../../../fonts/LiberationSans-Bold.ttf"
+FONT_SANS_I RCDATA "../../../fonts/LiberationSans-Italic.ttf"
+FONT_SERIF RCDATA "../../../fonts/LiberationSerif-Regular.ttf"
+FONT_SERIF_B RCDATA "../../../fonts/LiberationSerif-Bold.ttf"
+FONT_PAGELLA_I RCDATA "../../../fonts/texgyrepagella-italic.otf"
+
 1 VERSIONINFO
 FILEVERSION 1,0,0,0
 PRODUCTVERSION 1,0,0,0

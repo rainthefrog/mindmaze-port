@@ -303,30 +303,84 @@ void plat_set_cursor(int hand)
 void plat_invalidate(void) { g_dirty = 1; if (g_hwnd) InvalidateRect(g_hwnd, NULL, FALSE); }
 void plat_quit(void) { DestroyWindow(g_hwnd); }
 
+/* ---- font faces. CHANGE 2026-11-18: Wine / Proton without the Microsoft fonts substituted a much wider face for
+ * Tahoma (DejaVu Sans), which cut off panel labels ("Physical Scienc"). A face missing from the system is replaced
+ * by the open font built into the exe (mindmaze.rc, the same fonts the web / Android build uses), loaded for this
+ * process only. On Windows every face exists and nothing changes. ---- */
+static const wchar_t *g_tahoma = L"Tahoma", *g_arial = L"Arial", *g_times = L"Times New Roman",
+                     *g_palatino = L"Palatino Linotype";
+
+static int CALLBACK font_found(const LOGFONTW *lf, const TEXTMETRICW *tm, DWORD type, LPARAM found)
+{
+    (void)lf; (void)tm; (void)type;
+    *(int *)found = 1;
+    return 0;
+}
+
+static int font_exists(const wchar_t *face)
+{
+    LOGFONTW lf = {0};
+    int found = 0;
+    lf.lfCharSet = DEFAULT_CHARSET;
+    wcsncpy(lf.lfFaceName, face, LF_FACESIZE - 1);
+    HDC dc = GetDC(NULL);
+    EnumFontFamiliesExW(dc, &lf, font_found, (LPARAM)&found, 0);
+    ReleaseDC(NULL, dc);
+    return found;
+}
+
+static void font_load(const wchar_t *res)                /* an RCDATA font from mindmaze.rc, private to this process */
+{
+    HRSRC r = FindResourceW(NULL, res, MAKEINTRESOURCEW(10) /* RT_RCDATA */);
+    HGLOBAL g = r ? LoadResource(NULL, r) : NULL;
+    DWORD n = 0;
+    if (g) AddFontMemResourceEx(LockResource(g), SizeofResource(NULL, r), NULL, &n);
+}
+
+static void fonts_init(void)
+{
+    if (!font_exists(L"Tahoma") || !font_exists(L"Arial")) {
+        font_load(L"FONT_SANS");
+        font_load(L"FONT_SANS_B");
+        font_load(L"FONT_SANS_I");
+        if (!font_exists(L"Tahoma")) g_tahoma = L"Liberation Sans";
+        if (!font_exists(L"Arial")) g_arial = L"Liberation Sans";
+    }
+    if (!font_exists(L"Times New Roman")) {
+        font_load(L"FONT_SERIF");
+        font_load(L"FONT_SERIF_B");
+        g_times = L"Liberation Serif";
+    }
+    if (!font_exists(L"Palatino Linotype")) {
+        font_load(L"FONT_PAGELLA_I");
+        g_palatino = L"TeX Gyre Pagella";
+    }
+}
+
 /* ---- text: Tahoma 8pt (Encarta font resource 32001), bold, Arial for the player list (4921) ---- */
 static void make_fonts(int s)
 {
     if (g_font_scale == s) return;
     for (int i = 0; i < FONT_COUNT; i++) if (g_fonts[i]) DeleteObject(g_fonts[i]);
-    g_fonts[FONT_TEXT] = CreateFontW(-11 * s, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Tahoma");
-    g_fonts[FONT_BOLD] = CreateFontW(-11 * s, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Tahoma");
-    g_fonts[FONT_LIST] = CreateFontW(-13 * s, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Arial");
-    g_fonts[FONT_SMALL] = CreateFontW(-9 * s, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Tahoma");
+    g_fonts[FONT_TEXT] = CreateFontW(-11 * s, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_tahoma);
+    g_fonts[FONT_BOLD] = CreateFontW(-11 * s, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_tahoma);
+    g_fonts[FONT_LIST] = CreateFontW(-13 * s, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_arial);
+    g_fonts[FONT_SMALL] = CreateFontW(-9 * s, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_tahoma);
     /* Panel fonts from the original's FONT resources (ENCARTAR.DLL RCDATA, "FONT" records: 0x65 height, 0x69 weight,
      * 0x72 face string 20010 Arial / 20011 Times New Roman / 20015 Tahoma): 32001 Tahoma -11 (buttons, radios),
      * 32002 Tahoma -11 bold (headings), 4916 Arial -12 (Progress line), 4931 Times New Roman -18 (name, answer
      * letters, points), 4929 Times New Roman -14 (answer buttons). Assigned in FUN_0051edb0 / FUN_0051e630. */
-    g_fonts[FONT_NAME] = CreateFontW(-18 * s, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Times New Roman");
-    g_fonts[FONT_SCORE] = CreateFontW(-12 * s, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Arial");
+    g_fonts[FONT_NAME] = CreateFontW(-18 * s, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_times);
+    g_fonts[FONT_SCORE] = CreateFontW(-12 * s, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_arial);
     /* answers: Tahoma 11, centred, as in a screenshot of the original (user, 2026-11-18; was Times New Roman 14
      * from RCDATA 4929) */
-    g_fonts[FONT_ANSWER] = CreateFontW(-11 * s, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Tahoma");
-    g_fonts[FONT_ANSWER_I] = CreateFontW(-11 * s, 0, 0, 0, FW_NORMAL, TRUE, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Tahoma");
+    g_fonts[FONT_ANSWER] = CreateFontW(-11 * s, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_tahoma);
+    g_fonts[FONT_ANSWER_I] = CreateFontW(-11 * s, 0, 0, 0, FW_NORMAL, TRUE, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_tahoma);
     /* level numerals: bitmaps 29154-29157 have 17 px tall italic serif digits; Palatino Linotype figures are ~0.69 em,
      * so -25 px gives the same height (was -22, 15 px digits) */
-    g_fonts[FONT_LEVEL] = CreateFontW(-25 * s, 0, 0, 0, FW_NORMAL, TRUE, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Palatino Linotype");
-    g_fonts[FONT_ITALIC] = CreateFontW(-11 * s, 0, 0, 0, FW_NORMAL, TRUE, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Tahoma");
-    g_fonts[FONT_POINTS] = CreateFontW(-24 * s, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Times New Roman");
+    g_fonts[FONT_LEVEL] = CreateFontW(-25 * s, 0, 0, 0, FW_NORMAL, TRUE, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_palatino);
+    g_fonts[FONT_ITALIC] = CreateFontW(-11 * s, 0, 0, 0, FW_NORMAL, TRUE, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_tahoma);
+    g_fonts[FONT_POINTS] = CreateFontW(-24 * s, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_times);
     g_font_scale = s;
 }
 
@@ -1009,6 +1063,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
     }
 
     g_memdc = CreateCompatibleDC(NULL);
+    fonts_init();
     WNDCLASSEXW wc = {sizeof wc, CS_DBLCLKS, wndproc, 0, 0, inst,
                       LoadImageW(inst, L"APPICON", IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0),
                       LoadCursor(NULL, IDC_ARROW), NULL, NULL, L"MindMaze",
