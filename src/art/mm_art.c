@@ -364,15 +364,85 @@ static int match_flat_background(float *rgb, float *a, int w, int h, const float
     return 1;
 }
 
+/* ------------------------------------------------------------------------------------------------ */
+/* Outline cleanup of keyed pictures, shared by finish() (HD) and wide_install() (widescreen).
+ * CHANGE 2026-11-18: the agent's own drawing defines the outline. Its edge pixels are mixed with a background
+ * that is not exactly pure magenta, so unmixing leaves stair steps and a pink / purple rim. Three steps:
+ *   edge_band     - band = solid pixels (alpha >= 0.5) within 2 px of the clear area (alpha < 0.5)
+ *   edge_mark     - nt = 1 for faint pink on the band (min(R,B) - G > 8), 3 for the soft edge (0 < alpha < 1),
+ *                   0 for the rest; pink / purple away from the outline is left alone (real purples, curtains)
+ *   edge_recolour - nt 1 / 3 pixels take the mean colour of the clean 3x3 neighbours (solid and unmarked, or
+ *                   recoloured in an earlier pass; 4 passes, each pass reads the state of the pass before)
+ *   edge_soften   - 3x3 [1 2 1] blur of alpha on the band and the soft edge only (body solid, clear area clear)
+ * Mirrored in tools/art/mm_cut.py (edge_* functions), used by tools/art/mm_wide_cut.py. */
+static void edge_band(unsigned char *band, const float *a, int w, int h)
+{
+    size_t n = (size_t)w * h;
+    for (size_t i = 0; i < n; i++) band[i] = a[i] < 0.5f;
+    dilate(band, w, h, 2);
+    for (size_t i = 0; i < n; i++) band[i] = band[i] && a[i] >= 0.5f;
+}
+
+static void edge_mark(unsigned char *nt, const float *rgb, const float *a, const unsigned char *band, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        const float *p = rgb + 3 * i;
+        float pink = (p[0] < p[2] ? p[0] : p[2]) - p[1];
+        nt[i] = band[i] && pink > 8.f ? 1 : a[i] > 0.f && a[i] < 1.f ? 3 : 0;
+    }
+}
+
+static void edge_recolour(float *rgb, const float *a, unsigned char *nt, int w, int h)
+{
+    for (int pass = 0; pass < 4; pass++) {
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                size_t i = (size_t)y * w + x;
+                if (nt[i] != 1 && nt[i] != 3) continue;
+                float s[3] = {0, 0, 0}, ws = 0;
+                for (int yy = y - 1; yy <= y + 1; yy++)
+                    for (int xx = x - 1; xx <= x + 1; xx++) {
+                        if (yy < 0 || xx < 0 || yy >= h || xx >= w) continue;
+                        size_t k = (size_t)yy * w + xx;
+                        if (!(nt[k] == 2 || (nt[k] == 0 && a[k] >= 1.f))) continue;   /* clean neighbours only */
+                        for (int ch = 0; ch < 3; ch++) s[ch] += rgb[3 * k + ch];
+                        ws += 1;
+                    }
+                if (ws > 0) { for (int ch = 0; ch < 3; ch++) rgb[3 * i + ch] = s[ch] / ws; nt[i] = 4; }
+            }
+        for (size_t i = 0; i < (size_t)w * h; i++) if (nt[i] == 4) nt[i] = 2;   /* clean from the next pass on */
+    }
+}
+
+static void edge_soften(float *a, const unsigned char *band, int w, int h, float *a2)
+{
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            size_t i = (size_t)y * w + x;
+            if (!band[i] && !(a[i] > 0.f && a[i] < 1.f)) { a2[i] = a[i]; continue; }
+            float s = 0, ws = 0;
+            for (int yy = -1; yy <= 1; yy++)
+                for (int xx = -1; xx <= 1; xx++) {
+                    int sy = y + yy < 0 ? 0 : y + yy >= h ? h - 1 : y + yy, sx = x + xx < 0 ? 0 : x + xx >= w ? w - 1 : x + xx;
+                    float k = (float)((yy ? 1 : 2) * (xx ? 1 : 2));
+                    s += a[(size_t)sy * w + sx] * k;
+                    ws += k;
+                }
+            a2[i] = s / ws;
+        }
+    memcpy(a, a2, sizeof(float) * (size_t)w * h);
+}
+
 /* one picture: part = HD pixels of its bounds (uint8 RGB), mine = pixels that belong to it; returns RGB or RGBA */
 static AImg *finish(const unsigned char *part, int w, int h, int keyed, const unsigned char *mine, const AImg *orig, int dx, int dy)
 {
     size_t n = (size_t)w * h;
     float *o2rgb = calloc(n * 3, sizeof(float)), *rgb = malloc(sizeof(float) * n * 3), *a = malloc(sizeof(float) * n);
     unsigned char *o2solid = calloc(n, 1), *inner = malloc(n), *hole = calloc(n, 1), *fringe = calloc(n, 1), *tmp = malloc(n),
-                  *mask = malloc(n);
+                  *mask = malloc(n), *outside = calloc(n, 1);
+    int *q = malloc(sizeof(int) * (n + 1));
     AImg *out = NULL;
-    if (!o2rgb || !rgb || !a || !o2solid || !inner || !hole || !fringe || !tmp || !mask) goto done;
+    if (!o2rgb || !rgb || !a || !o2solid || !inner || !hole || !fringe || !tmp || !mask || !outside || !q) goto done;
     int oy = -dy, ox = -dx;
     for (int y = 0; y < h; y++)                                  /* original at 2x, placed at (-dx, -dy) */
         for (int x = 0; x < w; x++) {
@@ -395,14 +465,37 @@ static AImg *finish(const unsigned char *part, int w, int h, int keyed, const un
     }
     memcpy(inner, o2solid, n);
     erode(inner, w, h, 2);
+    /* CHANGE 2026-11-18: the outline is the agent's own (soft, at 2x). Before, everything inside the original's
+     * silhouette was made solid and its outline band took the original's colours, so the edge followed the
+     * original's pixels doubled: a 2 px staircase. Now only key colour enclosed by the picture (not joined to
+     * the background around it) is a hole and gets the original's colour; the rest keeps the agent's alpha. */
+    if (keyed) {
+        int qh = 0, qt = 0;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                if (y && y < h - 1 && x && x < w - 1) continue;
+                size_t i = (size_t)y * w + x;
+                const unsigned char *p = part + 3 * i;
+                if (key_alpha3(p[0], p[1], p[2]) < 1.0f && !outside[i]) { outside[i] = 1; q[qt++] = (int)i; }
+            }
+        while (qh < qt) {
+            int i = q[qh++], y = i / w, x = i % w;
+            int nb4[4] = {y > 0 ? i - w : -1, y < h - 1 ? i + w : -1, x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1};
+            for (int j = 0; j < 4; j++) {
+                int k = nb4[j];
+                if (k < 0 || outside[k]) continue;
+                const unsigned char *p = part + 3 * k;
+                if (key_alpha3(p[0], p[1], p[2]) < 1.0f) { outside[k] = 1; q[qt++] = k; }
+            }
+        }
+    }
     for (size_t i = 0; i < n; i++) {
         const unsigned char *p = part + 3 * i;
         float raw = key_alpha3(p[0], p[1], p[2]);
-        if (keyed && inner[i]) a[i] = 1.0f;
-        hole[i] = inner[i] && raw < 1.0f;
-        fringe[i] = keyed && o2solid[i] && !inner[i] && raw < 1.0f;
+        hole[i] = keyed ? inner[i] && raw < 1.0f && !outside[i] : inner[i] && raw < 1.0f;
+        if (keyed && hole[i]) a[i] = 1.0f;
         if (hole[i]) memcpy(rgb + 3 * i, o2rgb + 3 * i, sizeof(float) * 3);
-        mask[i] = inner[i] && !hole[i];
+        mask[i] = inner[i] && !hole[i] && raw >= 1.0f;
     }
     match_colours(rgb, o2rgb, mask, (int)n);
     for (size_t i = 0; i < n; i++) if (hole[i] || fringe[i]) memcpy(rgb + 3 * i, o2rgb + 3 * i, sizeof(float) * 3);
@@ -413,15 +506,39 @@ static AImg *finish(const unsigned char *part, int w, int h, int keyed, const un
             if (!o2solid[i] && light_pink(part[3 * i], part[3 * i + 1], part[3 * i + 2])) a[i] = 0.f;
     for (size_t i = 0; i < n; i++) tmp[i] = tinted(o2rgb[3 * i], o2rgb[3 * i + 1], o2rgb[3 * i + 2]) && o2solid[i];
     dilate(tmp, w, h, 3);
-    for (size_t i = 0; i < n; i++) {
-        float *p = rgb + 3 * i;
-        int nt = tinted(clampf(p[0], 0, 255), clampf(p[1], 0, 255), clampf(p[2], 0, 255)) && !tmp[i];
-        if (!nt) continue;
-        if (has_flat) { p[0] = flat[0]; p[1] = flat[1]; p[2] = flat[2]; }
-        else {
-            if (o2solid[i] && !inner[i]) memcpy(p, o2rgb + 3 * i, sizeof(float) * 3);
-            if (!o2solid[i]) a[i] = 0.f;
+    /* no NEW magenta tint (pink / purple outline bleed) where the original has none nearby. UI pictures: the flat
+     * background colour. Others (CHANGE 2026-11-18): the colour of the clean picture pixels next to it, so the soft
+     * edge stays where the agent drew it (was: the original's colour, or cut off, which made the edge jagged) */
+    /* The soft edge (alpha between 0 and 1) also takes the colour of the solid pixels next to it: the agent's edge
+     * pixels are mixed with a background that is not exactly pure magenta, and unmixing them leaves a pink rim. */
+    unsigned char *nt = fringe;                                  /* reused: edge_mark codes */
+    unsigned char *band = outside;                               /* reused: solid pixels within 2 px of the clear area */
+    if (has_flat) {
+        for (size_t i = 0; i < n; i++) {
+            float *p = rgb + 3 * i;
+            if (tinted(clampf(p[0], 0, 255), clampf(p[1], 0, 255), clampf(p[2], 0, 255)) && a[i] > 0.f && !tmp[i]) {
+                p[0] = flat[0]; p[1] = flat[1]; p[2] = flat[2];
+            }
         }
+    } else {
+        if (keyed) {                                             /* outline: faint pink on the band, soft edge */
+            edge_band(band, a, w, h);
+            edge_mark(nt, rgb, a, band, n);
+        } else {
+            memset(band, 0, n);
+            memset(nt, 0, n);
+        }
+        for (size_t i = 0; i < n; i++) {                         /* plus a new magenta tint anywhere */
+            float *p = rgb + 3 * i;
+            if (tinted(clampf(p[0], 0, 255), clampf(p[1], 0, 255), clampf(p[2], 0, 255)) && a[i] > 0.f && !tmp[i]) nt[i] = 1;
+        }
+        edge_recolour(rgb, a, nt, w, h);
+        for (size_t i = 0; i < n; i++)
+            if (nt[i] == 1) {                                    /* tint with nothing clean nearby: original colour / clear */
+                if (o2solid[i]) memcpy(rgb + 3 * i, o2rgb + 3 * i, sizeof(float) * 3);
+                else a[i] = 0.f;
+            }
+        if (keyed) edge_soften(a, band, w, h, (float *)o2rgb);  /* o2rgb reused (3n floats) */
     }
     out = aimg_new(w, h, keyed ? 4 : 3);
     if (!out) goto done;
@@ -435,6 +552,7 @@ static AImg *finish(const unsigned char *part, int w, int h, int keyed, const un
     }
 done:
     free(o2rgb); free(rgb); free(a); free(o2solid); free(inner); free(hole); free(fringe); free(tmp); free(mask);
+    free(outside); free(q);
     return out;
 }
 
@@ -922,8 +1040,25 @@ static int wide_install(Txt *rep, int *installed, Txt *stamp)
                     float m = ch == 1 ? 0.f : 255.f, safe = al > 1e-3f ? al : 1e-3f;
                     if (al < 1.0f) c[ch] = clampf((c[ch] - (1.0f - al) * m) / safe, 0.f, 255.f);
                 }
-                a[p] = al * 255.f;
+                a[p] = al;
             }
+            /* CHANGE 2026-11-18: the same outline cleanup as the HD pictures (edge_* above): the unmix alone left a
+             * pink / purple rim (pot, ceiling beams). Only the band and the soft edge are recoloured, so purple
+             * areas inside a picture (lady1's curtain) stay. The outer 2 rows / columns of the box count as outline
+             * too: where the painting touches the box they are mixed with the magenta around it (lady1's top row). */
+            unsigned char *band = malloc(np), *nt = malloc(np);
+            float *a2 = malloc(sizeof(float) * np);
+            if (band && nt && a2) {
+                edge_band(band, a, w2, h2);
+                for (int y = 0; y < h2; y++)
+                    for (int x = 0; x < w2; x++)
+                        if ((y < 2 || y >= h2 - 2 || x < 2 || x >= w2 - 2) && a[(size_t)y * w2 + x] >= 0.5f) band[(size_t)y * w2 + x] = 1;
+                edge_mark(nt, rgb, a, band, np);
+                edge_recolour(rgb, a, nt, w2, h2);
+                edge_soften(a, band, w2, h2, a2);
+            }
+            free(band); free(nt); free(a2);
+            for (size_t p = 0; p < np; p++) a[p] *= 255.f;
         }
         for (size_t p = 0; p < np; p++) {
             for (int ch = 0; ch < 3; ch++) im2->p[4 * p + ch] = (unsigned char)clampf(rgb[3 * p + ch] + 0.5f, 0.f, 255.f);

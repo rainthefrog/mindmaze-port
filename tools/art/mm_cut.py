@@ -11,9 +11,11 @@ Steps per sheet / picture:
   sprite's box belong to that sprite (a spill between two sprites goes to the nearest connection), and the
   picture grows to include them. Unconnected specks are dropped. hd/bounds.json records per picture where its
   image starts relative to the original box and its size, in 2x pixels: {name: {dx, dy (<= 0), w, h, grown}}.
-- The ORIGINAL decides what is solid: inside the original's outline (shrunk by 2 px) a transparent sprite is
-  always opaque, and leftover key colour there is filled from the original picture. Only the outline band and
-  spills use the key.
+- The AGENT's drawing decides the outline (CHANGE 2026-11-18; before, the original's silhouette doubled to 2x
+  did, which gave a 2 px staircase): only key colour enclosed by the picture inside the original's outline
+  (shrunk by 2 px), not joined to the background around it, is a hole and gets the original's colour.
+- Outline cleanup (edge_* below, also used by mm_wide_cut.py): faint pink on the 2 px outline band and the soft
+  edge take the colour of the clean pixels next to them, then alpha is softened along the outline.
 - Colours are matched back to the original (per channel mean and contrast over the solid pixels): the model
   tends to warm everything up.
 - Pictures whose original has a flat edge colour (panel buttons, award squares, Points seal) get their
@@ -141,6 +143,72 @@ def match_flat_background(rgb, alpha, o2rgb, o2solid, orig):
     return rgb, alpha, c0
 
 
+# ---------------------------------------------------------------------------------------------- outline cleanup
+# CHANGE 2026-11-18 (same as edge_* in src/art/mm_art.c): the agent's edge pixels are mixed with a background that
+# is not exactly pure magenta, so unmixing leaves stair steps and a pink / purple rim.
+def _sum3(v, weights=None, edge=False):
+    """3x3 neighbourhood sum (zero padding, or edge-extended); weights: 3x3 array."""
+    p = np.pad(v, ((1, 1), (1, 1)) + ((0, 0),) * (v.ndim - 2), mode="edge" if edge else "constant")
+    h, w = v.shape[:2]
+    s = np.zeros(v.shape, np.float32)
+    for dy in range(3):
+        for dx in range(3):
+            k = 1.0 if weights is None else weights[dy][dx]
+            s += p[dy:dy + h, dx:dx + w] * k
+    return s
+
+
+def edge_band(a):
+    """Solid pixels (alpha >= 0.5) within 2 px of the clear area (alpha < 0.5)."""
+    return dilate(a < 0.5, 2) & (a >= 0.5)
+
+
+def edge_mark(rgb, a, band):
+    """1: faint pink on the band (min(R,B) - G > 8); 3: soft edge (0 < alpha < 1); 0: the rest. Pink / purple away
+    from the outline is left alone (real purples)."""
+    pink = np.minimum(rgb[..., 0], rgb[..., 2]) - rgb[..., 1]
+    return np.where(band & (pink > 8), 1, np.where((a > 0) & (a < 1), 3, 0)).astype(np.uint8)
+
+
+def edge_recolour(rgb, a, nt):
+    """nt 1 / 3 pixels take the mean colour of the clean 3x3 neighbours (solid and unmarked, or recoloured in an
+    earlier pass); 4 passes, each reading the state of the pass before. Recoloured pixels become nt 2."""
+    rgb = rgb.astype(np.float32).copy()
+    nt = nt.copy()
+    for _ in range(4):
+        todo = (nt == 1) | (nt == 3)
+        if not todo.any():
+            break
+        clean = ((nt == 2) | ((nt == 0) & (a >= 1))).astype(np.float32)
+        cnt = _sum3(clean)
+        s = _sum3(rgb * clean[..., None])
+        upd = todo & (cnt > 0)
+        rgb[upd] = s[upd] / cnt[upd][:, None]
+        nt[upd] = 2
+    return rgb, nt
+
+
+def edge_soften(a, band):
+    """3x3 [1 2 1] blur of alpha on the band and the soft edge only (body solid, clear area clear)."""
+    k = [[1, 2, 1], [2, 4, 2], [1, 2, 1]]
+    blur = _sum3(a.astype(np.float32), k, edge=True) / 16
+    return np.where(band | ((a > 0) & (a < 1)), blur, a).astype(np.float32)
+
+
+def outside_key(part_rgb):
+    """Key colour (key_alpha < 1) joined (4-neighbour) to the border of the part: the background around it."""
+    key = key_alpha(part_rgb) < 1.0
+    out = np.zeros_like(key)
+    out[0], out[-1], out[:, 0], out[:, -1] = key[0], key[-1], key[:, 0], key[:, -1]
+    while True:
+        nxt = out
+        for _ in range(16):                       # one px per step, so it never jumps over the picture
+            nxt = dilate(nxt, 1) & key
+        if (nxt == out).all():
+            return out
+        out = nxt
+
+
 def owners(drawn, boxes):
     """Owner cell per pixel: inside a box = that cell; drawn pixels outside all boxes = the cell they connect
     to (multi-source BFS from the box edges, so a shared spill goes to the nearest connection); else -1."""
@@ -181,27 +249,40 @@ def finish(part_rgb, keyed, mine, orig, dx, dy):
     a = key_alpha(part_rgb) if keyed else np.ones(shape, np.float32)
     rgb = unmix(part_rgb, a)
     inner = erode(o2solid, 2)
-    if keyed:
-        a = np.where(inner, 1.0, a)                                   # the original's body is always solid
     raw = key_alpha(part_rgb)
-    hole = inner & (raw < 1.0)                                         # key colour left inside the body
-    fringe = keyed & o2solid & ~inner & (raw < 1.0)                    # thin details / outline mixed with magenta
+    # CHANGE 2026-11-18: the outline is the agent's own. Before, the whole eroded original silhouette was made
+    # solid and the outline band took the original's colours (a 2 px staircase). Now only key colour enclosed by
+    # the picture (not joined to the background around it) is a hole and gets the original's colour.
+    hole = inner & (raw < 1.0)
+    if keyed:
+        hole &= ~outside_key(part_rgb)
+        a = np.where(hole, 1.0, a)
     rgb[hole] = o2rgb[hole]
-    rgb = match_colours(rgb, o2rgb, inner & ~hole)
+    rgb = match_colours(rgb, o2rgb, inner & ~hole & (raw >= 1.0))
     rgb[hole] = o2rgb[hole]
-    rgb[fringe] = o2rgb[fringe]                                        # original colour, soft edge from the key
     rgb, a, flat = match_flat_background(rgb, a, o2rgb, o2solid, orig)
     if keyed:                                                          # pink edge bleed in spills
         a = np.where(~o2solid & light_pink(part_rgb), 0.0, a)
-    # no NEW pink: light pink where the original has none nearby is magenta bleed -> original colour (or clear)
     # no NEW magenta tint (pink, lilac, purple outlines) where the original has none nearby: magenta bleed
-    newtint = tinted(np.clip(rgb, 0, 255)) & ~dilate(tinted(o2rgb) & o2solid, 3)
+    newtint = tinted(np.clip(rgb, 0, 255)) & (a > 0) & ~dilate(tinted(o2rgb) & o2solid, 3)
     if flat is not None:                                               # UI / awards: the flat background colour
         rgb[newtint] = flat
     else:
-        band = o2solid & ~inner
-        rgb[newtint & band] = o2rgb[newtint & band]                    # outline: the original colour
-        a = np.where(newtint & ~o2solid, 0.0, a)                       # outside the original: clear
+        # CHANGE 2026-11-18: the colour of the clean picture pixels next to it (was: the original's colour, or
+        # cut off, which made the edge jagged), plus the outline cleanup of keyed pictures (edge_*)
+        if keyed:
+            band = edge_band(a)
+            nt = edge_mark(rgb, a, band)
+        else:
+            band = np.zeros(shape, bool)
+            nt = np.zeros(shape, np.uint8)
+        nt[newtint] = 1
+        rgb, nt = edge_recolour(rgb, a, nt)
+        left = nt == 1                                                 # nothing clean nearby: original colour / clear
+        rgb[left & o2solid] = o2rgb[left & o2solid]
+        a = np.where(left & ~o2solid, 0.0, a)
+        if keyed:
+            a = edge_soften(a, band)
     a = np.where(mine, a, 0.0)
     if not keyed:
         return np.round(rgb).astype(np.uint8)

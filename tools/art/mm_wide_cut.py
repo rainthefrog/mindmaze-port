@@ -7,7 +7,7 @@ A wide picture is Codex's whole painting, never mixed with the game's own pictur
 drawn over the new one as odd scenes and seams, 2026-11-16):
   - FILL sheets: the painting inside the sheet's wide box (picture + green strips). Every FILL result registers
     to its sheet exactly (checked: bbox and difference against shifted / scaled versions), so the game's click
-    areas and the layers still line up. Transparent pictures are keyed on magenta like tools/mm_cut.py; opaque
+    areas and the layers still line up. Transparent pictures are keyed on magenta like tools/mm_cut.py (with its outline cleanup); opaque
     ones get their outer 4 rows/columns repeated inwards (they carry magenta from the sheet around them).
   - STRETCH (logonscr): the same crop. Its first result was painted over the whole canvas (another layout);
     check_bounds now warns about any result whose painted area is not the sheet box (regenerate those).
@@ -82,7 +82,18 @@ def main():
         else:
             a = mm_cut.key_alpha(rgb)
             a[a < 0.08] = 0
-            wide2 = np.concatenate([mm_cut.unmix(rgb, a), (a * 255)[..., None]], axis=2)
+            col = mm_cut.unmix(rgb, a)
+            # CHANGE 2026-11-18: the same outline cleanup as the HD pictures (mm_cut.edge_*): the unmix alone left
+            # a pink / purple rim (pot, ceiling beams). Only the band and the soft edge are recoloured, so purple
+            # areas inside a picture (lady1's curtain) stay. The outer 2 rows / columns of the box count as outline
+            # too: where the painting touches the box they are mixed with the magenta around it (lady1's top row).
+            band = mm_cut.edge_band(a)
+            frame = np.zeros(a.shape, bool)
+            frame[:2], frame[-2:], frame[:, :2], frame[:, -2:] = True, True, True, True
+            band |= frame & (a >= 0.5)
+            col, _ = mm_cut.edge_recolour(col, a, mm_cut.edge_mark(col, a, band))
+            a = mm_cut.edge_soften(a, band)
+            wide2 = np.concatenate([col, (a * 255)[..., None]], axis=2)
 
         im2 = Image.fromarray(np.clip(wide2 + 0.5, 0, 255).astype(np.uint8), "RGBA")
         wide1 = np.asarray(im2.convert("RGBa").resize((tw, h), Image.LANCZOS).convert("RGBA")).copy()
