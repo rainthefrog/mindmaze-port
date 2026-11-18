@@ -1,7 +1,7 @@
 # mindmaze-port
 
 Open-source port of **MindMaze** (also written *Mind Maze*), the castle trivia game from Microsoft Encarta
-(Encarta 95, 97 ... 2006). Bring your own Encarta disc (2006, or 95 to 98); runs on Windows and Android.
+(Encarta 95, 97 ... 2006). Bring your own Encarta disc (2006, or 95 to 98); runs on Windows, Linux (Wine / Proton) and Android.
 
 > Not affiliated with or endorsed by Microsoft. Encarta and MindMaze are trademarks of Microsoft.
 > This repository contains no Microsoft content: the pictures, sounds, music, questions and texts are read
@@ -77,6 +77,9 @@ disc, please open an issue with its message.
    exe's folder is not writable), which takes a few seconds, and starts. The disc is not needed afterwards.
 
 Keys: F2 HD art, F3 widescreen (when that art is present, see below), F11 full screen.
+
+**Linux / Steam Deck:** run the same exe with Wine (`wine MindMaze.exe`), or add it to Steam as a non-Steam game
+and pick Proton. A mounted disc is found through Wine's `Z:` drive; otherwise choose the `.iso` in the file dialog.
 
 For developers there is also a Python version of the extractor (`tools/extract/extract.py`, needs 7-Zip); both
 write the same data folder.
