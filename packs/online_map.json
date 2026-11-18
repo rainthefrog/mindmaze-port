@@ -1,0 +1,99 @@
+{
+ "opentdb": {
+  "endpoint": "https://opentdb.com/api.php?amount=50&type=multiple&encode=url3986&category={id}&difficulty={difficulty}&token={token}",
+  "categories_by_area": {
+   "0": [
+    17,
+    18,
+    19,
+    28,
+    30
+   ],
+   "1": [
+    27,
+    17
+   ],
+   "2": [
+    22
+   ],
+   "3": [
+    23
+   ],
+   "4": [
+    24
+   ],
+   "5": [
+    20
+   ],
+   "6": [
+    10,
+    25,
+    29,
+    31
+   ],
+   "7": [
+    11,
+    12,
+    13,
+    14,
+    26,
+    32
+   ],
+   "8": [
+    15,
+    16,
+    21
+   ]
+  },
+  "difficulty_by_level": {
+   "0": "easy",
+   "1": "medium",
+   "2": "hard",
+   "3": "hard"
+  }
+ },
+ "triviaapi": {
+  "endpoint": "https://the-trivia-api.com/v2/questions?limit=50&types=text_choice&categories={categories}&difficulties={difficulty}",
+  "categories_by_area": {
+   "0": [
+    "science"
+   ],
+   "1": [
+    "science"
+   ],
+   "2": [
+    "geography"
+   ],
+   "3": [
+    "history"
+   ],
+   "4": [
+    "society_and_culture"
+   ],
+   "5": [
+    "society_and_culture"
+   ],
+   "6": [
+    "arts_and_literature"
+   ],
+   "7": [
+    "film_and_tv",
+    "music"
+   ],
+   "8": [
+    "sport_and_leisure",
+    "food_and_drink"
+   ]
+  },
+  "difficulty_by_level": {
+   "0": "easy",
+   "1": "medium",
+   "2": "hard",
+   "3": "hard"
+  }
+ },
+ "terms": {
+  "opentdb": "Open Trivia DB: CC BY-SA 4.0 (attribute opentdb.com, share alike). No key. One request per 5 s per IP, max 50 questions per request, type=multiple; use a session token (api_token.php?command=request, expires after 6 h idle; response_code 4 = exhausted, 5 = rate limit). Level 3 has no own difficulty: use hard.",
+  "triviaapi": "The Trivia API: CC BY-NC 4.0 - free for non-commercial use only, commercial use needs a paid subscription; credit the API somewhere discreet. No key for English text_choice questions; max 50 per request; 20 requests per 5 s per IP (429 above). Sessions, images, translations need a key. Level 3 = hard (the pack also uses isNiche for level 3)."
+ }
+}

@@ -1,0 +1,45 @@
+MindMaze HD and widescreen art - instructions for an AI agent that can generate images (written for OpenAI Codex)
+
+Data folder: <data-folder>
+Which art:   <which-art>     (one of: HD, WIDESCREEN, BOTH)
+
+BEFORE ANYTHING ELSE
+- If <data-folder> above still reads literally like that (not replaced by a real path), ask the user for the
+  path of MindMaze's data folder (the folder named "data" next to MindMaze.exe, made by the game on its first
+  start; it holds tables.json, the *.dib pictures and the folder art/). Wait for the answer.
+- If <which-art> is not filled in, ask: "HD (sharper 2x pictures), WIDESCREEN (side extensions for a wider
+  view), or BOTH?" Wait for the answer.
+- Check the folder: it must contain art/work/hd/sheets/ and art/work/wide/sheets/ with *.png sheets and a .txt
+  next to each (MindMaze writes them on its first start). If they are missing, tell the user to start MindMaze
+  once and stop.
+- Tell the user, before generating anything: this uses many image generations (HD: 28 sheets, widescreen: 20
+  sheets, with up to 2 tries each) and can take a large share of their usage limit or a noticeable API bill. It
+  can be stopped at any time and continued later: finished sheets are skipped. Ask them to confirm.
+
+WHAT TO DO (paths relative to <data-folder>; do not run or write any scripts - MindMaze does the rest itself)
+HD (sharper pictures, the game's F2 key):
+  Follow art/PROMPT-HD.txt with
+    <sheets-folder> = <data-folder>/art/work/hd/sheets
+    <output-folder> = <data-folder>/art/work/hd/out_gen
+  (do not ask the user again for these two folders).
+WIDESCREEN (side extensions, the game's F3 key; do HD first if the user chose BOTH):
+  Follow art/PROMPT-WIDE.txt with
+    <sheets-folder> = <data-folder>/art/work/wide/sheets
+    <output-folder> = <data-folder>/art/work/wide/out_gen
+
+INSTALLING
+MindMaze cuts the results into the pictures it shows: tell the user to start MindMaze (or restart it, or press
+Settings > Pictures / HD art > Install). It writes art/work/REPORT.txt; read it afterwards (ask the user to tell you
+when MindMaze has started). Every line starting with REGENERATE names a widescreen sheet whose painting went outside
+its box: generate that one sheet once more (the rules in PROMPT-WIDE.txt) and have the user install again.
+
+RULES THAT MATTER MOST
+- Never give the image model an earlier RESULT as an input image; only the sheet itself (and its mask).
+- One generation per sheet (widescreen: at most two when a check fails). Never resize or edit with a script.
+- Write only into <data-folder>/art/work/hd/out_gen and <data-folder>/art/work/wide/out_gen.
+
+WHEN DONE
+Tell the user: start MindMaze (restart it if it was running). F2 or the menu "Use HD Art" switches between the
+original and the HD pictures, F3 or "Widescreen" switches the wide view on and off; the same switches are in
+Settings > Pictures. The art/work folder can be deleted afterwards to save space.
+The pictures are made from Microsoft's art: they are for the user's own use, not for sharing.

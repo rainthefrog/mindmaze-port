@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>MindMaze</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none;
+               -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  canvas { position: absolute; left: 0; top: 0; outline: none; }
+  #import { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; padding: 16px;
+            background: #1b1a17; color: #d9d6c5; font: 16px/1.45 sans-serif; overflow: auto; }
+  #import > div { max-width: 560px; }
+  #import h1 { font: bold 22px serif; color: #e8c872; margin: 0 0 8px; }
+  #import p { margin: 8px 0; }
+  #import label { display: inline-block; margin: 8px 8px 0 0; padding: 10px 16px; background: #972938; color: #fff;
+                  border-radius: 4px; cursor: pointer; }
+  #import input[type=file] { display: none; }
+  /* links to a disc image or a zip (CHANGE 2026-11-18) */
+  .link-row { display: flex; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+  .link-row input { flex: 1 1 180px; min-width: 0; padding: 9px 10px; font: 16px sans-serif; border-radius: 4px;
+                    border: 1px solid #6e655a; background: #2a2824; color: #f2efe4; }
+  button.mm { padding: 10px 16px; background: #972938; color: #fff; border: 0; border-radius: 4px; font: 16px sans-serif;
+              cursor: pointer; }
+  button.mm.alt { background: #4a463f; }
+  #remote { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; padding: 16px;
+            background: rgba(0, 0, 0, .78); color: #d9d6c5; font: 16px/1.45 sans-serif; overflow: auto; z-index: 5; }
+  #remote > div { width: min(560px, 100%); background: #1b1a17; border: 1px solid #6e655a; border-radius: 6px; padding: 14px 16px; }
+  #remote h2 { font: bold 18px serif; color: #e8c872; margin: 0 0 6px; }
+  #import-progress { display: none; margin-top: 12px; }
+  #import-track { height: 10px; background: #3a3833; border-radius: 5px; overflow: hidden; }
+  #import-bar { height: 100%; width: 0; background: #e8c872; }
+  #import-error { color: #ff9a8a; white-space: pre-line; }
+  .small { font-size: 13px; color: #a8a498; }
+  #msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px;
+         color: #d9d6c5; font: 16px/1.4 sans-serif; text-align: center; white-space: pre-line; }
+</style>
+</head>
+<body>
+<canvas id="screen" tabindex="0"></canvas>
+<div id="msg">Loading MindMaze...</div>
+<!-- Settings > Add questions from a disc: a disc image, or MINDMAZE.DB + MINDMAZE.IDX -->
+<input id="add-art" type="file" accept=".zip,application/zip" style="display:none">
+<input id="add-disc" type="file" multiple accept=".iso,.db,.idx,application/x-iso9660-image,application/octet-stream" style="display:none">
+<div id="import"><div>
+  <h1>MindMaze</h1>
+  <p>MindMaze uses the pictures, sounds and questions from your own copy of <b>Microsoft Encarta</b>: 2006 Premium,
+     or Encarta 95 (MPEG edition), 96 (Macintosh), 97 or 98 (US English). They are copied once into this app; the
+     disc is not needed afterwards.</p>
+  <div id="import-buttons">
+    <label>Import a MindMaze data file (.zip)<input id="import-zip" type="file" accept=".zip,application/zip"></label>
+    <p class="small">Made on a PC: in the Windows game, Settings &gt; "Export data for the phone app". Quickest.</p>
+    <p>Or from the disc:</p>
+    <label>Choose the disc image (.iso)<input id="import-iso" type="file" accept=".iso,application/x-iso9660-image,application/octet-stream"></label>
+    <label>Choose the five files<input id="import-files" type="file" multiple></label>
+    <p class="small">The five files are ENCARTA.EXE, ENCARTAR.DLL, MINDMAZE.DB, MINDMAZE.IDX and MINDMAZE.EIT (folder
+       EE\ENCARTA on the Encarta 2006 disc). For Encarta 95 to 98 choose the disc image.</p>
+    <p>Or from a link to a disc image (.iso) or a MindMaze data file (.zip):</p>
+    <div class="link-row"><input id="link-url" type="url" inputmode="url" autocomplete="off" placeholder="https://.../disc.iso">
+      <button class="mm" id="link-go">Import</button></div>
+  </div>
+  <div id="import-progress"><div id="import-track"><div id="import-bar"></div></div><p id="import-step"></p></div>
+  <p id="import-error"></p>
+  <p class="small">Not affiliated with Microsoft. Encarta and MindMaze are trademarks of Microsoft.</p>
+</div></div>
+<!-- Settings > Add questions from a disc, Settings > Pictures > HD pictures: a file on this device, or a link -->
+<div id="remote"><div>
+  <h2 id="remote-title">Add questions from a disc</h2>
+  <p class="small" id="remote-note"></p>
+  <button class="mm" id="remote-file">Choose a file on this device</button>
+  <div class="link-row"><input id="remote-url" type="url" inputmode="url" autocomplete="off" placeholder="or paste a link">
+    <button class="mm alt" id="remote-go">Add</button></div>
+  <p id="remote-error" style="color:#ff9a8a"></p>
+  <button class="mm alt" id="remote-close">Cancel</button>
+</div></div>
+<script src="shell.js"></script>
+<script src="mindmaze.js"></script>
+</body>
+</html>

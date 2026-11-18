@@ -1,0 +1,93 @@
+Task: AI-upscale MindMaze sprite sheets with your IMAGE GENERATION / image editing model, one sheet at a time.
+
+Input folder:  <sheets-folder>   (default: art/work/hd/sheets in MindMaze's data folder; 28 sheets, all 768x512,
+                                  made by MindMaze on its first start)
+Output folder: <output-folder>   (default: art/work/hd/out_gen in the data folder)
+BEFORE ANYTHING ELSE: if <sheets-folder> or <output-folder> above still reads literally like that (not
+replaced by a real path), ask the user where the sheets are and where the results should go, offering the
+defaults, and wait for the answer. Check that the input folder holds the *.png sheets with a .txt next to each;
+if not, tell the user to start MindMaze once (it writes them) and stop.
+
+Write each result to <output-folder>\<same file name>.png - exactly 2x the sheet: 1536x1024.
+Skip sheets that already exist in <output-folder>.
+Every sheet has a .txt next to it (same name) that lists each picture's box in sheet pixels and what it shows.
+Read it before generating and put its NOTE line and the descriptions into the request.
+The FIRST WORD of every file name says what is on the sheet (backgrounds, layers, doors, characters,
+furniture, pictures, overlays, pages, ui), followed by a number.
+For each sheet use the COMMON RULES plus the ONE section named by the first word of its file name.
+
+ORDER: finish a group before starting the next, each group in name order:
+1) backgrounds  2) layers  3) doors  4) characters  5) furniture  6) pictures  7) overlays  8) ui  9) pages.
+
+Request 2x the sheet size from the image model (1536x1024). ONE GENERATION PER SHEET: save whatever the model
+returns as long as it has the sheet's shape (MindMaze fixes the size when it installs the result). Never generate a sheet again
+because of its size, and never generate again to "improve" a result; only retry if the tool fails or returns
+no image. Never produce a result by resizing the input with a script or program (no PIL, ImageMagick, OpenCV,
+ESRGAN, bicubic, lanczos, nearest): every sheet must go through the image model. Do not crop, pad, add margins
+or rearrange anything. Never give the model an earlier RESULT as an input image (it copies that layout).
+
+=== COMMON RULES (put these in every image-model request) ===
+"Redraw this sheet at 2x resolution (twice the input's width and height) as sharper, more detailed versions of
+ the same pictures. MindMaze (Microsoft Encarta, 1990s): hand-painted fairy-tale castle illustrations in a
+ classic storybook style - gouache / acrylic painting with soft brush texture, warm light, rich but natural
+ colours, clean painted edges.
+ - LAYOUT: every picture stays at exactly the same position, size and outline. Do not move, add, remove,
+   merge or duplicate anything. Pictures that touch an edge of their box stay touching it.
+ - CONTENT: the same people, faces, expressions, costumes, poses, objects and details - only cleaner and more
+   detailed (fabric folds, wood grain, stone texture, hair, metal shine). Do not invent new objects, symbols,
+   patterns or text.
+ - COLOURS: keep the original hue, saturation, brightness and colour temperature. Do not warm up, cool down,
+   brighten or add contrast. No new colour casts.
+ - BACKGROUND: the flat pure magenta #FF00FF around the pictures stays flat pure magenta: no shadows, glow,
+   gradients, texture or dark outlines on it, and no magenta inside the pictures. Edges between a picture
+   and the magenta are clean and sharp (no halo).
+ - No borders, frames, labels, captions, signatures or watermarks."
+
+=== backgrounds ===
+Full painted backgrounds (opaque, they fill their box completely; the magenta area beside them stays magenta).
+Keep the perspective lines of walls, floors and doorways exactly: the game draws ceilings, floors, doors,
+furniture and characters on top of the room-wall pictures (dunrm, plnwalls), so walls, corners and the floor
+line must not move. logonscr: the painted lettering on the stone tablet must stay exactly the same words, in
+the same serif letters, size and place - repaint the letters crisply, never change or invent text. titlescr:
+keep the banner lettering "Mind Maze" exactly.
+
+=== layers ===
+Ceilings and floor coverings that the game lays over the room walls. They are drawn in perspective and must
+keep their exact outline, angle and width (635-636 px) so they still line up with the walls. Rugs: keep the
+pattern, only crisper. Ceilings: wooden beams and rafters with visible wood grain.
+
+=== doors ===
+Doors placed into the room walls: keep each outline exactly so it fits its wall opening. Wooden plank doors
+with iron or brass fittings in stone arches; the tower doorway shows a stone spiral staircase. The small
+square sign with the red down arrow stays a simple sign.
+
+=== characters ===
+People of a medieval fairy-tale court painted in the same storybook style: the duke with his parrot, the
+jester, the king, the queen with her train bearers, the sorceress, the alchemist, travellers, ladies,
+servants, a man in the stocks, suits of armour. Keep every face (age, expression, direction of the eyes),
+costume, colour and pose exactly; more detail in faces, hands, fabric and props. Some characters stand on a
+piece of floor or furniture (jack-in-the-box, rug, column) - keep those parts too. Do not make anyone more
+cartoonish or more realistic than the input.
+
+=== furniture ===
+Furniture and decorations for the rooms (tables, chairs, bookshelf, chest, vases, candles, banners, weapons).
+Keep each outline and perspective exactly; more detail in wood grain, fabric, metal and glaze.
+
+=== pictures ===
+Small framed pictures that hang on the walls: each shows a black-and-white engraving-style icon for one area of
+interest (atom, skeleton, globe, hourglass, people, symbols, ...) - keep the icon and frame exactly, only
+sharper. Also the award pictures (ribbon rosette, medal, ring, trophy, empty plaque) on their beige squares.
+
+=== overlays ===
+Parchment panels the game writes text onto: an illuminated letter Q banner and a plain speech parchment.
+Keep the writing areas EMPTY parchment - no text, lines or new decoration. Sharpen the illuminated Q, the
+hooks and the zig-zag cut edges.
+
+=== ui ===
+Control-panel buttons on their beige background. Each picture is a strip of 4 states of the SAME button side
+by side (normal, highlighted, faded/disabled, pressed): keep the 4 copies in their exact places and sizes, the
+same symbol in each, only the colours differ as in the input. Calligraphic numerals 1-4 stay the same numerals.
+
+=== pages ===
+Story pages made of printed text. Copy every letter exactly (same words, line breaks, font and size). If the
+model cannot keep the text exactly readable, keep the page as it is and only sharpen it. Never rewrite text.

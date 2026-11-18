@@ -1,0 +1,105 @@
+Task: WIDESCREEN extensions for MindMaze pictures with your IMAGE GENERATION / image editing model (outpainting),
+one sheet at a time.
+
+Input folder:  <sheets-folder>   (default: art/work/wide/sheets in MindMaze's data folder; 20 sheets, all
+                                  768x512, with masks; made by MindMaze on its first start)
+Output folder: <output-folder>   (default: art/work/wide/out_gen in the data folder)
+BEFORE ANYTHING ELSE: if <sheets-folder> or <output-folder> above still reads literally like that (not
+replaced by a real path), ask the user where the sheets are and where the results should go, offering the
+defaults, and wait for the answer. Check that the input folder holds the *.png sheets with a .txt next to each;
+if not, tell the user to start MindMaze once (it writes them) and stop.
+(Below, "wide\sheets\" means <sheets-folder> and "out_gen\" / "wide\out_gen\" mean <output-folder>.)
+
+Write each result to <output-folder>\<same file name>.png - exactly 2x the sheet: 1536x1024.
+Skip sheets that already exist in <output-folder>.
+Every sheet has a .txt next to it (same name) with:
+  ACTION    FILL IN DETAILS or STRETCH (see below)
+  PICTURE   the picture's box and what it shows
+  PAINT     the flat pure green #00FF00 area(s) to paint
+  TASK      what the green area must show for this picture
+  GEOMETRY  exact lines and points the painting must follow (sheet pixels, the 2x result's pixels in brackets)
+Read it before generating and put ALL of it (ACTION, description, PAINT, TASK, Extra and every GEOMETRY line)
+into the request, together with the COMMON RULES, the ALIGNMENT RULES and the section for the ACTION.
+The masks in codex\wide\masks\<name>.png (white = green paint area) show the paint area exactly; use them as
+the edit mask if your image tool takes one.
+
+ORDER: 1) backgrounds  2) layers  3) objects, each group in name order.
+
+Request 2x the sheet size from the image model (1536x1024). Never produce a result with a script or program
+(no PIL, ImageMagick, OpenCV, ESRGAN, resizing, mirroring, copying, cloning or stretching pixels into the green
+area): every sheet must go through the image model. Do not crop, pad, add margins or rearrange anything. Never
+give the model an earlier RESULT (from wide\out_gen\, codex\out_gen\ or codex\hd\) as an input image: only the
+sheet from wide\sheets\ (and its mask).
+
+=== COMMON RULES (put these in every image-model request) ===
+"Redraw this sheet at 2x resolution (twice the input's width and height). MindMaze (Microsoft Encarta, 1990s):
+ hand-painted fairy-tale castle illustrations in a classic storybook style - gouache / acrylic painting with
+ soft brush texture, warm light, rich but natural colours, clean painted edges.
+ - Everything that is not green stays exactly as it is: same position, size, outline, content and colours,
+   only redrawn sharper.
+ - The flat GREEN area(s) are empty canvas: paint them as described. Fill them completely: no green may be left
+   in the result, and nothing is painted outside the picture's box.
+ - Do not mirror or copy parts of the picture into the green area; continue it logically.
+ - Nothing new and eye-catching in the green area: no new people, animals, doors, windows, furniture, symbols,
+   lettering or light sources unless the TASK says so.
+ - COLOURS: keep the original hue, saturation, brightness and colour temperature. No new colour casts. The
+   painted area is exactly as bright, as saturated and as detailed as the picture right next to it.
+ - MAGENTA: the flat pure magenta #FF00FF area stays flat pure magenta: no shadows, glow, gradients, texture
+   or outlines on it, and no magenta inside the painting. Edges between painting and magenta are clean and
+   sharp (no halo).
+ - No borders, frames, labels, captions, signatures or watermarks."
+
+=== ALIGNMENT RULES (put these in every image-model request; they keep the pieces lining up in the game) ===
+"The game puts these pictures on top of each other (walls, then ceiling, floor covering, doors, furniture,
+ characters), and the walls and every layer are extended separately. They only line up if every extension
+ follows the same strict geometry:
+ 1. SEAM: at the border between the picture and the green area every edge, line, stone course, beam, plank,
+    pattern row and colour continues with no offset, no step, no bend and no gap. Nothing ends at the border.
+ 2. STRAIGHT LINES: every line listed under GEOMETRY is a straight line from its border point to its end point.
+    Follow it exactly (within 2 px at 2x). Do not curve it, do not change its angle.
+ 3. PERSPECTIVE: lines that run into the depth of the room meet at the GEOMETRY vanishing point. Lines parallel
+    to the back wall stay exactly horizontal. Upright edges (posts, wall corners, door sides, table legs) stay
+    exactly vertical. No lens curve, no fisheye, no tilt.
+ 4. SCALE: things in the green area have the same size as next to the border (stone blocks, planks, rug
+    pattern, checkerboard squares, beams), only growing slightly where perspective brings them closer.
+ 5. OUTLINE: a layer or object ends exactly where its GEOMETRY says; beyond that it is flat magenta. Do not
+    widen, round off or shorten an outline at the seam.
+ 6. STATIC SCENE: do not move, resize or redraw anything outside the green area to make the extension fit."
+
+=== ACTION: FILL IN DETAILS (all sheets except backgrounds_000) ===
+The picture keeps its size and place in the game: the view simply becomes wider, like a camera that sees
+further to the side. Paint what lies beyond the old edge, following the TASK and the GEOMETRY.
+
+=== ACTION: STRETCH (backgrounds_000 = the sign-in screen) ===
+This picture has its own ornamental border frame. On the sheet the frame bars and corner rosettes have
+already been moved out to the new, wider edges, and the green gaps lie between the moved frame and the rest of
+the picture. Close the gaps so the picture looks as if it had always been this wide: the top and bottom frame
+bands continue straight through the gaps (same height, thickness and rope ornament), the corner rosettes stay
+round and complete, and inside the frame the castle wall and paving continue. The stone tablet with its
+lettering keeps its size and its letters exactly; no new letters anywhere.
+
+=== backgrounds ===
+Full opaque scene paintings with green on both sides: the green becomes opaque painting (no magenta). In the
+rooms the side walls run towards the viewer; in the green strips they continue outwards along the GEOMETRY
+floor line, and their stone courses / panels follow the vanishing point.
+
+=== layers ===
+Ceilings (wooden beams, rafters, posts) and floor coverings (rugs, checkerboard floor) drawn in perspective on
+magenta. Continue the layer only as far as its GEOMETRY lines allow: where a GEOMETRY line says the edge leaves
+the picture, the layer ends there and everything beyond is flat magenta. The checkerboard rows stay
+horizontal and the squares keep their size.
+
+=== objects ===
+A character or object cut off at the left or right edge of the room view. Paint the part that was outside the
+frame into the green strip, starting exactly where GEOMETRY says the outline crosses the border, with the same
+width and direction, matching the visible part (same person, clothes, colours, light). Where nothing of it
+would be, flat magenta. Do not change the visible part; do not add another person or object.
+
+=== CHECK each result before moving on (measuring with a script is allowed; changing pixels is not) ===
+- No green pixels left (no pixel with G > 200 and R, B < 80).
+- At every GEOMETRY point (2x coordinates) the line or edge is within 4 px of the given position.
+- The seam: compare a 6 px wide column on each side of each border; no visible jump in colour or brightness.
+If a sheet fails a check, generate it ONE more time with the same request plus a sentence naming what was
+wrong (for example "the floor line must end at (4, 572)"). Keep whichever of the two results passes more checks;
+never more than 2 generations per sheet. Write a line per sheet to out_gen\CHECK.txt: name, which checks passed,
+and whether it was generated twice.

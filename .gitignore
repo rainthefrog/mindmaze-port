@@ -1,0 +1,65 @@
+# Build output
+/build/
+__pycache__/
+*.pyc
+
+# Extracted Microsoft Encarta content: never commit (see README "What is not in this repository")
+/data/
+/assets/
+/original/
+/engine/
+questions.json
+*.iso
+*.ISO
+*.EIT
+*.eit
+MINDMAZE.DB
+MINDMAZE.IDX
+mindmaze.db
+mindmaze.idx
+*.dib
+*.DIB
+ENCARTA*.EXE
+ENCARTA*.DLL
+tables.json
+mm_tables_generated.h
+
+# Codex / AI art made from the extracted pictures (derivatives): prompts are in the repo, results are not
+/codex/sheets/
+/codex/out_gen/
+/codex/hd/
+/codex/map.json
+/codex/wide/sheets/
+/codex/wide/masks/
+/codex/wide/out_gen/
+/codex/wide/hd/
+/codex/wide/map.json
+/codex/icon/out/
+/codex/icon/reference*
+
+# Question pack caches and packs that may not be redistributed (build them yourself: tools/packs)
+/tools/packs/cache/
+/packs/triviaapi.json
+
+# Player files
+mindmaze.ini
+seen.txt
+custom_questions.json
+online_questions.json
+
+# Android / web build output (app/ = the Capacitor project; app/www is copied from build/web)
+/app/www/
+/app/android/app/build/
+/app/android/build/
+/app/android/.gradle/
+/app/android/app/src/main/assets/public/
+/app/android/capacitor-cordova-android-plugins/build/
+/app/android/local.properties
+node_modules/
+*.sf2
+*.apk
+*.keystore
+*.jks
+
+# local release page for test builds (kept out of the repository)
+tools/release-server/

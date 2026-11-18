@@ -1,0 +1,22 @@
+// MindMaze resources: the application icon (an original drawing, made by tools/art/make_icon.py).
+APPICON ICON "mindmaze.ico"
+
+1 VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "FileDescription", "MindMaze (mindmaze-port, open-source re-implementation)"
+      VALUE "ProductName", "MindMaze"
+      VALUE "FileVersion", "1.0"
+      VALUE "ProductVersion", "1.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
