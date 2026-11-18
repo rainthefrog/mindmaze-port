@@ -1,13 +1,15 @@
-/* Music on the web / Android: the game's MIDI files played with TinySoundFont (MIT, src/third_party) and a General
- * MIDI SoundFont from /soundfonts (several can be installed; Settings > Volume > "Music instruments" switches).
- * shell.js pulls the sound from web_music_render() in its WebAudio callback. Two channels like the Windows build:
- * 0 = background loops, 1 = question music; a channel that reaches the end of its file reports it to the core
- * (mm_music_ended) from the next frame. */
+/* Music without a system MIDI synthesizer (web / Android, Linux / macOS through SDL): the game's MIDI files played
+ * with TinySoundFont (MIT, src/third_party) and a General MIDI SoundFont (several can be installed; Settings > Volume
+ * > "Music instruments" switches). The platform registers the SoundFonts (music_add_soundfont) and pulls the sound
+ * from music_render() in its audio callback (web: shell.js's WebAudio callback; SDL: the audio stream callback,
+ * which holds a lock around every music_* call because it runs on another thread). Two channels like the Windows
+ * build: 0 = background loops, 1 = question music; a channel that reaches the end of its file reports it through
+ * music_take_ended, which the platform polls and passes to the core (mm_music_ended). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <emscripten.h>
 #include "mm.h"
+#include "music.h"
 
 #define TSF_IMPLEMENTATION
 #include "../../third_party/tsf.h"
@@ -15,7 +17,8 @@
 #include "../../third_party/tml.h"
 
 #define MAXFONTS 8
-static char g_font_file[MAXFONTS][64], g_font_name[MAXFONTS][64];
+static char g_font_file[MAXFONTS][512], g_font_name[MAXFONTS][64];
+static char g_data_dir[512] = "/data/";                   /* the MIDI files: <dir><lower-case name> */
 static int g_nfonts, g_font = -1, g_rate = 44100;
 static tsf *g_base;
 /* TinySoundFont at gain 1 renders the intro with peaks of 1.5 (TimGM6mb) to 2.5 (GeneralUser GS) times full scale
@@ -44,11 +47,12 @@ static void start(int c)
 {
     tml_free(g_ch[c].song);
     g_ch[c].song = g_ch[c].msg = NULL;
-    g_ch[c].playing = g_ch[c].paused = 0;
+    g_ch[c].playing = g_ch[c].paused = g_ch[c].ended = 0;   /* an end not yet reported belongs to the old track */
     if (!g_ch[c].name[0]) return;
-    char path[96];
-    snprintf(path, sizeof path, "/data/%s", g_ch[c].name);
-    for (char *p = path + 6; *p; p++) if (*p >= 'A' && *p <= 'Z') *p += 32;
+    char path[600];
+    size_t dl = strlen(g_data_dir);
+    snprintf(path, sizeof path, "%s%s", g_data_dir, g_ch[c].name);
+    for (char *p = path + dl; *p; p++) if (*p >= 'A' && *p <= 'Z') *p += 32;   /* stored with lower-case names */
     g_ch[c].song = g_ch[c].msg = tml_load_filename(path);
     g_ch[c].ms = 0;
     g_ch[c].playing = g_ch[c].song != NULL;
@@ -57,23 +61,22 @@ static void start(int c)
     channel_reset(c);
 }
 
-/* SoundFonts: /soundfonts/list.txt, one "file<TAB>name" per line (written by shell.js) */
-static void fonts_scan(void)
+/* ---- set up by the platform before mm_init ---- */
+void music_set_data_dir(const char *dir) { snprintf(g_data_dir, sizeof g_data_dir, "%s", dir); }
+
+/* the platform's lock around the music state (SDL: the audio callback runs on its own thread); none on the web */
+static void (*g_lock)(void), (*g_unlock)(void);
+void music_set_lock(void (*lock)(void), void (*unlock)(void)) { g_lock = lock; g_unlock = unlock; }
+#define LOCK() do { if (g_lock) g_lock(); } while (0)
+#define UNLOCK() do { if (g_unlock) g_unlock(); } while (0)
+
+int music_add_soundfont(const char *path, const char *name)
 {
-    if (g_nfonts) return;
-    FILE *f = fopen("/soundfonts/list.txt", "r");
-    if (!f) return;
-    char line[160];
-    while (g_nfonts < MAXFONTS && fgets(line, sizeof line, f)) {
-        line[strcspn(line, "\r\n")] = 0;
-        char *tab = strchr(line, '\t');
-        if (!*line) continue;
-        if (tab) *tab = 0;
-        snprintf(g_font_file[g_nfonts], sizeof g_font_file[0], "%s", line);
-        snprintf(g_font_name[g_nfonts], sizeof g_font_name[0], "%s", tab ? tab + 1 : line);
-        g_nfonts++;
-    }
-    fclose(f);
+    if (g_nfonts >= MAXFONTS) return 0;
+    snprintf(g_font_file[g_nfonts], sizeof g_font_file[0], "%s", path);
+    snprintf(g_font_name[g_nfonts], sizeof g_font_name[0], "%s", name);
+    g_nfonts++;
+    return 1;
 }
 
 static void load_font(int i)
@@ -85,9 +88,7 @@ static void load_font(int i)
     g_base = NULL;
     g_font = i;
     if (i < 0 || i >= g_nfonts) return;
-    char path[128];
-    snprintf(path, sizeof path, "/soundfonts/%s", g_font_file[i]);
-    g_base = tsf_load_filename(path);
+    g_base = tsf_load_filename(g_font_file[i]);
     if (!g_base) return;
     tsf_set_output(g_base, TSF_STEREO_INTERLEAVED, g_rate, 0.0f);
 
@@ -100,13 +101,22 @@ static void load_font(int i)
 }
 
 /* ---- the platform's instrument choice (Settings) ---- */
-int plat_instrument_count(void) { fonts_scan(); return g_nfonts; }
-const char *plat_instrument_name(int i) { fonts_scan(); return i >= 0 && i < g_nfonts ? g_font_name[i] : ""; }
+int plat_instrument_count(void) { return g_nfonts; }
+const char *plat_instrument_name(int i) { return i >= 0 && i < g_nfonts ? g_font_name[i] : ""; }
 int plat_instrument_get(void) { return g_font; }
+static void instrument_set(int i);
 void plat_instrument_set(int i)
 {
-    fonts_scan();
     if (i < 0 || i >= g_nfonts) return;
+    LOCK();
+    instrument_set(i);
+    UNLOCK();
+    char v[8];
+    snprintf(v, sizeof v, "%d", i);
+    plat_set_setting("soundfont", v);
+}
+static void instrument_set(int i)
+{
     load_font(i);
     for (int c = 0; c < 2; c++) {                               /* the playing tracks continue with the new sound */
         int was = g_ch[c].playing, paused = g_ch[c].paused;
@@ -123,20 +133,25 @@ void plat_instrument_set(int i)
         }
         g_ch[c].ms = ms;
     }
-    char v[8];
-    snprintf(v, sizeof v, "%d", i);
-    plat_set_setting("soundfont", v);
 }
 
-/* ---- called by web_main.c (plat_music*, plat_volume) ---- */
-void web_music_play(int c, const char *name)
+/* ---- called by the platform (its plat_music*, plat_volume) ---- */
+static void play(int c, const char *name);
+void music_play(int c, const char *name)
 {
     if (c < 0 || c > 1) return;
-    if (g_font < 0) {
+    int font = 0;
+    if (g_font < 0) {                                         /* the first track: the chosen SoundFont */
         char v[8];
-        fonts_scan();
-        load_font(plat_get_setting("soundfont", v, sizeof v) && atoi(v) < g_nfonts ? atoi(v) : 0);
+        if (plat_get_setting("soundfont", v, sizeof v) && atoi(v) >= 0 && atoi(v) < g_nfonts) font = atoi(v);
     }
+    LOCK();
+    if (g_font < 0) load_font(font);
+    play(c, name);
+    UNLOCK();
+}
+static void play(int c, const char *name)
+{
     if (c == 0 && g_fade_ms > 0 && g_ch[0].playing && name) {
         /* crossfade: the old track moves to the fading slot (with its synth and position) and fades out while
          * the new one fades in */
@@ -158,36 +173,52 @@ void web_music_play(int c, const char *name)
     snprintf(g_ch[c].name, sizeof g_ch[c].name, "%s", name ? name : "");
     start(c);
 }
-void web_music_fade(int ms) { g_fade_ms = ms; }
-void web_music_pause(int c, int pause)
+void music_fade(int ms) { LOCK(); g_fade_ms = ms; UNLOCK(); }
+void music_pause(int c, int pause)
 {
     if (c < 0 || c > 1) return;
+    LOCK();
     g_ch[c].paused = pause;
     if (pause && g_ch[c].synth) tsf_note_off_all(g_ch[c].synth);
+    UNLOCK();
 }
-void web_music_volume(int pct)
+void music_volume(int pct)
 {
+    LOCK();
     g_volume = MUSIC_GAIN * pct / 100.0f;
     for (int c = 0; c < 3; c++) if (g_ch[c].synth) tsf_set_volume(g_ch[c].synth, g_volume);
+    UNLOCK();
 }
 /* returns a channel whose track ended since the last call (-1 = none) */
-int web_music_take_ended(void)
+int music_take_ended(void)
 {
-    for (int c = 0; c < 2; c++) if (g_ch[c].ended) { g_ch[c].ended = 0; return c; }
-    return -1;
+    int r = -1;
+    LOCK();
+    for (int c = 0; c < 2 && r < 0; c++) if (g_ch[c].ended) { g_ch[c].ended = 0; r = c; }
+    UNLOCK();
+    return r;
 }
 
-/* ---- the WebAudio callback ---- */
-EMSCRIPTEN_KEEPALIVE void web_music_rate(int rate)
+/* ---- the audio callback ---- */
+void music_rate(int rate)
 {
     if (rate == g_rate || rate < 8000) return;
+    LOCK();
     g_rate = rate;
     int f = g_font;
     g_font = -1;
     if (f >= 0) load_font(f);
+    UNLOCK();
 }
 
-EMSCRIPTEN_KEEPALIVE void web_music_render(float *out, int frames)
+static void render(float *out, int frames);
+void music_render(float *out, int frames)
+{
+    LOCK();
+    render(out, frames);
+    UNLOCK();
+}
+static void render(float *out, int frames)
 {
     memset(out, 0, sizeof(float) * 2 * (size_t)frames);
     static float tmp[2 * 64];
@@ -232,7 +263,7 @@ EMSCRIPTEN_KEEPALIVE void web_music_render(float *out, int frames)
 }
 
 /* diagnostics for the browser test: font index, SoundFont loaded, channel 0/1 playing / track loaded */
-EMSCRIPTEN_KEEPALIVE int web_music_state(void)
+int music_state(void)
 {
     return (g_font + 1) | (g_base != NULL) << 4 | g_ch[0].playing << 5 | (g_ch[0].song != NULL) << 6 |
            g_ch[1].playing << 7 | (g_ch[1].song != NULL) << 8 | g_nfonts << 9;

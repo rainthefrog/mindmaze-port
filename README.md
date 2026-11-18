@@ -1,7 +1,7 @@
 # mindmaze-port
 
 Open-source port of **MindMaze** (also written *Mind Maze*), the castle trivia game from Microsoft Encarta
-(Encarta 95, 97 ... 2006). Bring your own Encarta disc (2006, or 95 to 98); runs on Windows, Linux (Wine / Proton) and Android.
+(Encarta 95, 97 ... 2006). Bring your own Encarta disc (2006, or 95 to 98); runs on Windows, Linux, macOS and Android.
 
 > Not affiliated with or endorsed by Microsoft. Encarta and MindMaze are trademarks of Microsoft.
 > This repository contains no Microsoft content: the pictures, sounds, music, questions and texts are read
@@ -78,8 +78,39 @@ disc, please open an issue with its message.
 
 Keys: F2 HD art, F3 widescreen (when that art is present, see below), F11 full screen.
 
-**Linux / Steam Deck:** run the same exe with Wine (`wine MindMaze.exe`), or add it to Steam as a non-Steam game
-and pick Proton. A mounted disc is found through Wine's `Z:` drive; otherwise choose the `.iso` in the file dialog.
+## Quick start (Linux)
+
+1. Download `MindMaze-linux-x86_64.tar.gz` from [Releases](../../releases) and unpack it (`tar xzf
+   MindMaze-linux-x86_64.tar.gz`). Nothing needs to be installed: it runs on Ubuntu 22.04 or later, SteamOS, Debian 12,
+   Fedora and other x86_64 desktops (X11 or Wayland).
+2. Start `MindMaze/MindMaze`. On the first start it looks for a mounted Encarta disc (`/media`, `/run/media`, `/mnt`);
+   if there is none it asks for the disc image (`.iso`), or for `ENCARTA.EXE` / `MINDMAZE.DB` on the disc. You can
+   also give the image on the command line: `./MindMaze ~/Downloads/Encarta.iso`.
+3. The data goes to `~/.local/share/MindMaze` (`$XDG_DATA_HOME/MindMaze`), or to a `data` folder next to the program
+   if you put one there (portable use, e.g. a copy from the Windows version).
+
+The file dialog needs xdg-desktop-portal or zenity (every desktop has one; in Steam Deck's game mode start it once
+from the desktop, or pass the image as above). Steam Deck: add `MindMaze` as a non-Steam game.
+
+**Alternative:** run the Windows exe with Wine (`wine MindMaze.exe`), or add it to Steam as a non-Steam game and pick
+Proton. A mounted disc is found through Wine's `Z:` drive; otherwise choose the `.iso` in the file dialog.
+
+## Quick start (macOS)
+
+1. Download `MindMaze-macos.zip` from [Releases](../../releases) and unzip it (Safari does this by itself). The app
+   runs on Apple Silicon and Intel Macs, macOS 11 or later.
+2. The app is not signed with an Apple developer ID, so macOS refuses the first double-click. Right-click (or
+   Control-click) `MindMaze.app` > **Open** > **Open**; on macOS 15 and later instead open it once, then System
+   Settings > Privacy & Security > **Open Anyway**. If macOS says the app "is damaged", remove the download
+   quarantine in Terminal: `xattr -dr com.apple.quarantine MindMaze.app`.
+3. On the first start it looks for a mounted Encarta disc or disc image in `/Volumes` (double-click the `.iso` in
+   the Finder to mount it); otherwise it asks for the image or `ENCARTA.EXE` / `MINDMAZE.DB`. The data goes to
+   `~/Library/Application Support/MindMaze`.
+
+Keys on Linux and macOS: F2 HD art, F3 widescreen, F11 or Alt+Enter full screen; Ctrl+N (macOS: Cmd+N) new game,
+Ctrl+M music on/off, Ctrl+E sound effects on/off, Ctrl+Q quit. The music plays through the bundled SoundFont
+GeneralUser GS; more `.sf2` SoundFonts put in a `soundfonts` folder next to the `data` folder (e.g.
+`~/.local/share/MindMaze/soundfonts`) appear in Settings > "Music instruments".
 
 For developers there is also a Python version of the extractor (`tools/extract/extract.py`, needs 7-Zip); both
 write the same data folder.
@@ -139,7 +170,17 @@ docker run --rm -v "$PWD:/w" -w /w mindmaze-port-dev make test win32
 | `make test` | core tests on synthetic fixtures (no Encarta files needed) + extractor tests |
 | `make test-data DATA=data` | the same core tests on your extracted data |
 | `make win32` | `build/win32/MindMaze.exe` (mingw-w64 cross build) |
+| `make linux` | `build/linux/MindMaze-linux-x86_64.tar.gz` (SDL3 linked in; in the image of `docker/linux.Dockerfile`, see below) |
+| `make macos` | `build/macos/MindMaze-macos.zip` (universal app; on a Mac with SDL3 from `tools/build_sdl3.sh`, see `.github/workflows/release.yml`) |
 | `make web`, `make android` | `build/web/` (WebAssembly engine) and `build/android/MindMaze.apk` |
+
+The Linux build runs in an Ubuntu 22.04 image with SDL3 built from source (so the program also runs on older
+systems):
+
+```
+docker build -t mindmaze-port-linux -f docker/linux.Dockerfile tools/
+docker run --rm -v "$PWD:/w" -w /w mindmaze-port-linux make linux
+```
 
 ## Repository layout
 
@@ -148,7 +189,9 @@ docker run --rm -v "$PWD:/w" -w /w mindmaze-port-dev make test win32
 | `src/core/` | the portable game (C11): maze, rooms, questions, panel, settings, tables loader |
 | `src/extract/` | built-in extractor (disc image / folder -> data folder): ISO 9660, MS Help 2 archive + LZX, PE resources, ADPCM, SHA-256 |
 | `src/platform/win32/` | Windows layer: window, GDI text, waveOut mixer, MIDI, ini, first-start setup |
+| `src/platform/sdl/` | Linux and macOS layer (SDL3): window, input, audio stream, files, first-start setup |
 | `src/platform/web/` | WebAssembly layer (in progress; engine of the Android app, not hosted anywhere) |
+| `src/platform/common/` | shared by the SDL and web layers: text (stb_truetype), SoundFont music (TinySoundFont), zip export |
 | `tools/extract/` | `extract.py` (Python reference extractor), `mmextract.c` (command-line front end of the built-in one), `mmdb.py` |
 | `src/art/` | built-in HD / widescreen art tools: makes the sheets, installs the agent's results |
 | `codex/`, `tools/art/` | the prompts; the reference Python versions of the art tools (developers) |
@@ -175,6 +218,7 @@ Code: [MIT](LICENSE). Question packs: their own licences, see [packs/LICENSES.md
 
 Bundled third-party parts (all free to redistribute): fonts Liberation Sans/Serif (SIL OFL 1.1) and TeX Gyre
 Pagella (GUST Font License) in `fonts/`; stb_image, stb_image_write, stb_truetype (public domain / MIT) and
-TinySoundFont (MIT) in `src/third_party/`; the web / Android music uses the SoundFont
+TinySoundFont (MIT) in `src/third_party/`; the Linux, macOS and web / Android music uses the SoundFont
 [GeneralUser GS](https://github.com/mrbumpy409/GeneralUser-GS) by S. Christian Collins
-([licence](soundfonts/LICENSE-GeneralUser-GS.txt)), downloaded at build time by `tools/fetch_soundfont.sh`.
+([licence](soundfonts/LICENSE-GeneralUser-GS.txt)), downloaded at build time by `tools/fetch_soundfont.sh`. The
+Linux and macOS builds link [SDL3](https://libsdl.org) (zlib licence), built from source by `tools/build_sdl3.sh`.

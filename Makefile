@@ -3,6 +3,8 @@
 #   make win32                 build/win32/MindMaze.exe (mingw-w64 cross build; the whole Windows download)
 #   make test-data DATA=data   the core tests on a folder extracted from an Encarta 2006 disc
 #   make test-extract ISO=...  the built-in C extractor against tools/extract/extract.py on a real disc
+#   make linux                 build/linux/MindMaze-linux-x86_64.tar.gz (SDL3; in the image of docker/linux.Dockerfile)
+#   make macos                 build/macos/MindMaze-macos.zip (SDL3; on a Mac with Xcode's tools, see release.yml)
 #   make web                   build/web/ (WebAssembly engine of the Android app; needs emcc: emscripten/emsdk image)
 #   make android               build/android/MindMaze.apk from build/web (mindmaze-port-android image; run make web first)
 CORE = src/core/mm_util.c src/core/mm_questions.c src/core/mm_rich.c src/core/mm_sources.c src/core/mm_settings.c \
@@ -10,7 +12,8 @@ CORE = src/core/mm_util.c src/core/mm_questions.c src/core/mm_rich.c src/core/mm
 EXTRACT = src/extract/mx_extract.c src/extract/mx_lzx.c src/extract/mx_util.c src/extract/mx_old.c src/extract/mx_edition.c \
           src/extract/mx_oldext.c src/extract/mx_tables.c src/extract/mx_tables_pe.c src/extract/mx_tables_ne.c \
           src/extract/mx_tables_mac.c build/embedded.c
-WIN32 = src/platform/win32/win32_main.c src/platform/win32/win32_setup.c src/platform/win32/win32_export.c
+WIN32 = src/platform/win32/win32_main.c src/platform/win32/win32_setup.c src/platform/win32/win32_export.c \
+        src/platform/common/zip_write.c
 HEADERS = src/core/mm.h src/core/mm_tables.h src/extract/mx.h src/extract/mx_tables.h src/extract/mx_oldext.h \
           src/art/mm_art.h src/art/mm_art_text.h
 # the project page the game links to (Settings > Pictures); the release workflow sets it from the repository
@@ -66,19 +69,19 @@ build/win32/MindMaze.exe: $(CORE) $(EXTRACT) $(WIN32) $(HEADERS) src/core/mm_gam
                           src/platform/win32/mindmaze.ico
 	mkdir -p build/win32
 	cd src/platform/win32 && $(MINGW)-windres mindmaze.rc -O coff -o ../../../build/win32/mindmaze_res.o
-	$(MINGW)-gcc $(CFLAGS) -msse2 -mfpmath=sse -municode -mwindows -Isrc/core -Isrc/extract -Isrc/art $(CORE) src/core/mm_game.c $(EXTRACT) $(WIN32) \
+	$(MINGW)-gcc $(CFLAGS) -msse2 -mfpmath=sse -municode -mwindows -Isrc/core -Isrc/extract -Isrc/art -Isrc/platform/common $(CORE) src/core/mm_game.c $(EXTRACT) $(WIN32) \
 	  build/win32/mindmaze_res.o -o $@ -static -lwinmm -lgdi32 -lshell32 -lole32 -lwindowscodecs -luuid -lwininet -lcomdlg32
 	$(MINGW)-strip $@
 
-WEB = src/platform/web/web_main.c src/platform/web/web_text.c src/platform/web/web_music.c
+WEB = src/platform/web/web_main.c src/platform/common/text.c src/platform/common/music.c
 WEB_EXPORTS = _main,_malloc,_free,_web_start,_web_resize,_web_mouse,_web_key,_web_char,_web_cmd,_web_music_ended,_web_http_done,_web_scale,_web_view_ext,_web_music_render,_web_music_rate,_web_music_state,_web_disc_reading,_web_disc_added,_web_art_installed
 web: build/web/mindmaze.js
-build/web/mindmaze.js: $(CORE) src/core/mm_game.c $(WEB) $(HEADERS) src/platform/web/web_text.h \
+build/web/mindmaze.js: $(CORE) src/core/mm_game.c $(WEB) $(HEADERS) src/platform/common/text.h src/platform/common/music.h \
                        src/platform/web/index.html src/platform/web/shell.js src/platform/web/extract-worker.js \
                        tools/extract/mmextract_web.c $(EXTRACT) build/soundfonts/GeneralUser-GS.sf2
 	mkdir -p build/web/fonts build/web/soundfonts
 	emcc -std=c11 -O2 -Wall -Wno-unused-parameter -Wno-missing-field-initializers -ffp-contract=off \
-	  -DMM_REPO_URL='"$(REPO_URL)"' -Isrc/core -Isrc/art -Isrc/platform/web $(CORE) src/core/mm_game.c $(WEB) \
+	  -DMM_REPO_URL='"$(REPO_URL)"' -Isrc/core -Isrc/art -Isrc/platform/common $(CORE) src/core/mm_game.c $(WEB) \
 	  -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=128MB -sFORCE_FILESYSTEM=1 -lidbfs.js -sENVIRONMENT=web \
 	  -sEXPORTED_FUNCTIONS=$(WEB_EXPORTS) \
 	  -sEXPORTED_RUNTIME_METHODS=FS,HEAPU8,UTF8ToString,stringToUTF8,stringToNewUTF8,lengthBytesUTF8,addRunDependency,removeRunDependency \
@@ -107,7 +110,60 @@ android: build/web/mindmaze.js
 	cd app/android && chmod +x gradlew && $(if $(KEYS),set -a && . $(KEYS)/keystore.properties && ANDROID_KEYSTORE=$(KEYS)/$$ANDROID_KEYSTORE && set +a && ,)./gradlew --no-daemon -q assembleDebug
 	mkdir -p build/android && cp app/android/app/build/outputs/apk/debug/app-debug.apk build/android/MindMaze.apk
 
+# Linux and macOS: one SDL3 layer (src/platform/sdl) + the shared text / music / zip code (src/platform/common).
+# SDL3 is linked statically (tools/build_sdl3.sh; pkg-config finds it through PKG_CONFIG_PATH), so the download needs
+# nothing installed. The fonts, the SoundFont and the icon sit next to the program (macOS: Contents/Resources).
+SDL = src/platform/sdl/sdl_main.c src/platform/sdl/sdl_audio.c src/platform/sdl/sdl_files.c src/platform/sdl/sdl_setup.c \
+      src/platform/common/text.c src/platform/common/music.c src/platform/common/zip_write.c
+SDL_HEADERS = src/platform/sdl/sdl.h src/platform/common/text.h src/platform/common/music.h src/platform/common/zip_write.h
+SDL_SRC = $(CORE) src/core/mm_game.c $(EXTRACT) $(SDL)
+SDL_INC = -Isrc/core -Isrc/extract -Isrc/art -Isrc/platform/common
+APP_VERSION_NAME ?= 1.0
+
+linux: build/linux/MindMaze-linux-x86_64.tar.gz
+build/linux/MindMaze-linux-x86_64.tar.gz: $(SDL_SRC) $(HEADERS) $(SDL_HEADERS) build/soundfonts/GeneralUser-GS.sf2 docs/icon.png \
+                                          src/platform/sdl/README-linux.txt LICENSE
+	rm -rf build/linux/MindMaze && mkdir -p build/linux/MindMaze/fonts build/linux/MindMaze/soundfonts
+	$(CC) $(CFLAGS) $(SDL_INC) $$(pkg-config --cflags sdl3) $(SDL_SRC) -o build/linux/MindMaze/MindMaze \
+	  -Wl,--as-needed $$(pkg-config --static --libs sdl3) -lm
+	strip build/linux/MindMaze/MindMaze
+	cp fonts/*.ttf fonts/*.otf fonts/LICENSE-*.txt build/linux/MindMaze/fonts/
+	cp build/soundfonts/GeneralUser-GS.sf2 soundfonts/LICENSE-GeneralUser-GS.txt build/linux/MindMaze/soundfonts/
+	cp docs/icon.png build/linux/MindMaze/mindmaze.png
+	cp LICENSE build/linux/MindMaze/LICENSE.txt
+	cp src/platform/sdl/README-linux.txt build/linux/MindMaze/README.txt
+	tar -C build/linux -czf $@ MindMaze
+
+# macOS: universal app (arm64 + x86_64; MACOS_ARCH="-arch arm64" for one), macOS 11 or later. Needs SDL3 built for
+# the same architectures: sh tools/build_sdl3.sh build/sdl3-macos "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+# -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0, then PKG_CONFIG_PATH=build/sdl3-macos/lib/pkgconfig make macos.
+# Not signed by a developer (no Apple ID): only the ad-hoc signature ("codesign -s -") that Apple Silicon needs to
+# run any program at all. The linker gives the binary one, but strip and the resources added to the bundle afterwards
+# invalidate it (macOS then calls the app "damaged"), so the finished bundle is signed ad-hoc once more.
+MACOS_ARCH ?= -arch arm64 -arch x86_64
+MACOS_APP = build/macos/MindMaze.app
+macos: build/macos/MindMaze-macos.zip
+build/macos/MindMaze-macos.zip: $(SDL_SRC) $(HEADERS) $(SDL_HEADERS) build/soundfonts/GeneralUser-GS.sf2 docs/icon.png \
+                                src/platform/sdl/Info.plist LICENSE
+	rm -rf $(MACOS_APP) build/macos/MindMaze.iconset $@
+	mkdir -p $(MACOS_APP)/Contents/MacOS $(MACOS_APP)/Contents/Resources/fonts $(MACOS_APP)/Contents/Resources/soundfonts \
+	         build/macos/MindMaze.iconset
+	clang $(CFLAGS) -Wno-unknown-warning-option -Wno-null-pointer-subtraction $(MACOS_ARCH) -mmacosx-version-min=11.0 $(SDL_INC) $$(pkg-config --cflags sdl3) \
+	  $(SDL_SRC) -o $(MACOS_APP)/Contents/MacOS/MindMaze $$(pkg-config --static --libs sdl3)
+	strip -x $(MACOS_APP)/Contents/MacOS/MindMaze
+	sed 's/@VERSION@/$(APP_VERSION_NAME)/g' src/platform/sdl/Info.plist > $(MACOS_APP)/Contents/Info.plist
+	for s in 16 32 128 256 512; do \
+	  sips -z $$s $$s docs/icon.png --out build/macos/MindMaze.iconset/icon_$${s}x$${s}.png > /dev/null && \
+	  sips -z $$((s * 2)) $$((s * 2)) docs/icon.png --out build/macos/MindMaze.iconset/icon_$${s}x$${s}@2x.png > /dev/null; \
+	done
+	iconutil -c icns build/macos/MindMaze.iconset -o $(MACOS_APP)/Contents/Resources/MindMaze.icns
+	cp fonts/*.ttf fonts/*.otf fonts/LICENSE-*.txt $(MACOS_APP)/Contents/Resources/fonts/
+	cp build/soundfonts/GeneralUser-GS.sf2 soundfonts/LICENSE-GeneralUser-GS.txt $(MACOS_APP)/Contents/Resources/soundfonts/
+	cp LICENSE $(MACOS_APP)/Contents/Resources/LICENSE.txt
+	codesign --force --sign - $(MACOS_APP)
+	cd build/macos && ditto -c -k --keepParent MindMaze.app MindMaze-macos.zip
+
 clean:
 	rm -rf build
 
-.PHONY: all test test-data test-extract win32 web android clean art-text
+.PHONY: all test test-data test-extract win32 web android linux macos clean art-text

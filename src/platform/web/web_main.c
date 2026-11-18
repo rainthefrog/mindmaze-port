@@ -3,7 +3,7 @@
  * Files: the data folder is /data (filled by the page from the app's storage), the player's files are /user
  * (IndexedDB, kept between runs), the fonts /fonts. Settings live in localStorage. Drawing: the core draws into a
  * 32-bit canvas at a whole-number scale; shell.js scales it to the screen (letterboxed). Sound effects: WebAudio.
- * Music: web_music.c (TinySoundFont + a SoundFont, rendered in shell.js's WebAudio callback). */
+ * Music: ../common/music.c (TinySoundFont + a SoundFont, rendered in shell.js's WebAudio callback); text: ../common/text.c. */
 #include <emscripten.h>
 #include <errno.h>
 #include <stdio.h>
@@ -11,7 +11,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include "mm.h"
-#include "web_text.h"
+#include "text.h"
+#include "music.h"
 #include "../../third_party/stb_image.h"
 
 static MMCanvas g_c;
@@ -172,15 +173,10 @@ void plat_sound(const char *name)
     for (char *p = lower; *p; p++) if (*p >= 'A' && *p <= 'Z') *p += 32;
     js_sound(lower);
 }
-void web_music_play(int c, const char *name);                  /* web_music.c */
-void web_music_pause(int c, int pause);
-void web_music_volume(int pct);
-void web_music_fade(int ms);
-int web_music_take_ended(void);
-void plat_music(int ch, const char *name) { web_music_play(ch, name); js_music(ch, name); }
-void plat_music_pause(int ch, int pause) { web_music_pause(ch, pause); js_music_pause(ch, pause); }
-void plat_music_fade(int ms) { web_music_fade(ms); }
-void plat_volume(int music, int sound) { web_music_volume(music); js_volume(music, sound); }
+void plat_music(int ch, const char *name) { music_play(ch, name); js_music(ch, name); }
+void plat_music_pause(int ch, int pause) { music_pause(ch, pause); js_music_pause(ch, pause); }
+void plat_music_fade(int ms) { music_fade(ms); }
+void plat_volume(int music, int sound) { music_volume(music); js_volume(music, sound); }
 void plat_beep(void) { js_beep(); }
 void plat_open_url(const char *url) { js_open_url(url); }
 void plat_open_data_folder(const char *rel) { (void)rel; }
@@ -247,7 +243,7 @@ static void frame(void)
         mm_tick();
         g_next_tick = now + 50 > g_next_tick + 50 ? now + 50 : g_next_tick + 50;
     }
-    for (int ch; (ch = web_music_take_ended()) >= 0;) mm_music_ended(ch);   /* a track reached its end */
+    for (int ch; (ch = music_take_ended()) >= 0;) mm_music_ended(ch);   /* a track reached its end */
     if (g_dirty) {
         g_dirty = 0;
         mm_draw(&g_c);
@@ -261,6 +257,16 @@ EMSCRIPTEN_KEEPALIVE int web_start(int dev_w, int dev_h)
     g_dev_w = dev_w;
     g_dev_h = dev_h;
     text_init("/fonts");
+    FILE *sf = fopen("/soundfonts/list.txt", "r");             /* the SoundFonts: "file<TAB>name" lines (shell.js) */
+    for (char line[160], path[200]; sf && fgets(line, sizeof line, sf);) {
+        line[strcspn(line, "\r\n")] = 0;
+        char *tab = strchr(line, '\t');
+        if (!*line) continue;
+        if (tab) *tab = 0;
+        snprintf(path, sizeof path, "/soundfonts/%s", line);
+        music_add_soundfont(path, tab ? tab + 1 : line);
+    }
+    if (sf) fclose(sf);
     char err[512] = "";
     if (!mm_init(err, sizeof err)) { js_error(err); return 0; }
     layout();
@@ -290,5 +296,9 @@ EMSCRIPTEN_KEEPALIVE void web_music_ended(int ch) { if (g_started) mm_music_ende
 EMSCRIPTEN_KEEPALIVE void web_http_done(int tag, const char *data, int len) { mm_http_done(tag, data, len); }
 EMSCRIPTEN_KEEPALIVE int web_scale(void) { return g_c.scale; }
 EMSCRIPTEN_KEEPALIVE int web_view_ext(void) { return g_c.ox; }
+/* the music (../common/music.c) for shell.js's WebAudio callback */
+EMSCRIPTEN_KEEPALIVE void web_music_rate(int rate) { music_rate(rate); }
+EMSCRIPTEN_KEEPALIVE void web_music_render(float *out, int frames) { music_render(out, frames); }
+EMSCRIPTEN_KEEPALIVE int web_music_state(void) { return music_state(); }
 
 int main(void) { return 0; }                                    /* shell.js calls web_start when the files are ready */

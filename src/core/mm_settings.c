@@ -58,6 +58,8 @@ static int skip_y(void) { return src_y(mm_source_count()) + 8; }
 /* volume bars (CHANGE): 0 music, 1 sound effects; click on the bar sets the level (steps of 5) */
 static int vol_y(int k) { return skip_y() + 48 + 24 * k; }
 enum { VOL_X = PX + 180, VOL_W = 200 };
+/* "Export data for the phone app" (CHANGE 2026-11-18): below the instruments row when the platform has both (SDL) */
+static int export_y(void) { return plat_instrument_count() > 0 ? vol_y(3) - 2 : vol_y(2) + 6; }
 static int vol_from_x(int x) { int v = (x - VOL_X) * 100 / VOL_W; v = (v + 2) / 5 * 5; return v < 0 ? 0 : v > 100 ? 100 : v; }
 static const int FY[NFIELD] = {PY + 46, PY + 130, PY + 168, PY + 190, PY + 212};
 static int field_h(int f) { return f == F_QUESTION ? 64 : 18; }
@@ -80,7 +82,7 @@ int mm_settings_hit(int x, int y)
         if (inside(x, y, PX + PW - 150, skip_y() - 2, 134, 20)) return 31;
         for (int k = 0; k < 2; k++) if (inside(x, y, VOL_X - 6, vol_y(k) - 2, VOL_W + 12, 20)) return 80 + k;
         if (plat_instrument_count() > 1 && inside(x, y, PX + 12, vol_y(2) - 2, PW - 24, 20)) return 82;
-        if (plat_can_export() && inside(x, y, PX + 16, vol_y(2) + 6, 220, 20)) return 83;
+        if (plat_can_export() && !S.status[0] && inside(x, y, PX + 16, export_y(), 220, 20)) return 83;
         if (inside(x, y, PX + 16, PY + PH - 30, 130, 20)) return 32;
         if (inside(x, y, PX + 156, PY + PH - 30, 150, 20)) return 35;
         if (inside(x, y, PX + PW - 96, PY + PH - 30, 80, 20)) return 33;
@@ -187,9 +189,10 @@ void mm_settings_draw(MMCanvas *c, int mx, int my)
                      plat_instrument_get() + 1, n);
             plat_text(c, VOL_X, vy, PW - (VOL_X - PX) - 16, 16, buf, FONT_TEXT, hv == 82 ? C_RED : C_TEXT, TX_LEFT | TX_VCENTER | TX_ELLIPSIS);
         }
-        if (plat_can_export()) {                                 /* Windows: hand the data to the phone app */
-            button(c, PX + 16, vol_y(2) + 6, 220, 20, "Export data for the phone app...", hv == 83);
-            plat_text(c, PX + 244, vol_y(2) + 6, PW - 260, 20, "one .zip for the Android app's import", FONT_TEXT, C_GREY, TX_LEFT | TX_VCENTER);
+        /* PC (Windows, Linux, macOS): hand the data to the phone app; hidden while a status message uses that line */
+        if (plat_can_export() && !S.status[0]) {
+            button(c, PX + 16, export_y(), 220, 20, "Export data for the phone app...", hv == 83);
+            plat_text(c, PX + 244, export_y(), PW - 260, 20, "one .zip for the Android app's import", FONT_TEXT, C_GREY, TX_LEFT | TX_VCENTER);
         }
         button(c, PX + 16, PY + PH - 30, 130, 20, "Add a question...", hv == 32);
         button(c, PX + 156, PY + PH - 30, 150, 20, "Pictures / HD art...", hv == 35);

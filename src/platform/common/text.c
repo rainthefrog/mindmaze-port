@@ -1,5 +1,5 @@
-/* Text for platforms without GDI (web / Android): open fonts rasterised with stb_truetype, laid out like the
- * Windows build's DrawText (alignment, word wrap, end ellipsis) so the panel layout of the core stays the same.
+/* Text for platforms without GDI (web / Android, Linux / macOS through SDL): open fonts rasterised with stb_truetype,
+ * laid out like the Windows build's DrawText (alignment, word wrap, end ellipsis) so the panel layout of the core stays the same.
  *
  * Fonts (fonts/, open licences): Liberation Sans for Tahoma and Arial, Liberation Serif for Times New Roman (both
  * metric-compatible with the Windows fonts), TeX Gyre Pagella Italic for Palatino Linotype Italic (level numerals).
@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "mm.h"
-#include "web_text.h"
+#include "text.h"
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "../../third_party/stb_truetype.h"

@@ -17,8 +17,18 @@ jobs:
         run: make test
       - name: Windows build (mingw-w64)
         run: make win32 REPO_URL=https://github.com/${{ github.repository }}
+      - name: Linux build (SDL3, in the Ubuntu 22.04 image of docker/linux.Dockerfile)
+        run: |
+          docker build -t mindmaze-port-linux -f docker/linux.Dockerfile tools/
+          docker run --rm -v "$PWD:/w" -w /w -u "$(id -u):$(id -g)" mindmaze-port-linux \
+            make linux REPO_URL=https://github.com/${{ github.repository }}
       - uses: actions/upload-artifact@v4
         with:
           name: MindMaze-win32
           path: build/win32/MindMaze.exe
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MindMaze-linux
+          path: build/linux/MindMaze-linux-x86_64.tar.gz
           if-no-files-found: error

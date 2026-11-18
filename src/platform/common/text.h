@@ -1,4 +1,4 @@
-/* Text with open fonts (web_text.c): the GDI-like layer the platform's plat_text* functions call. */
+/* Text with open fonts (text.c, shared by the web and SDL layers): the GDI-like layer the platform's plat_text* functions call. */
 #pragma once
 #include "mm.h"
 
