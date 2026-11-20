@@ -13,7 +13,8 @@ EXTRACT = src/extract/mx_extract.c src/extract/mx_lzx.c src/extract/mx_util.c sr
           src/extract/mx_oldext.c src/extract/mx_tables.c src/extract/mx_tables_pe.c src/extract/mx_tables_ne.c \
           src/extract/mx_tables_mac.c build/embedded.c
 WIN32 = src/platform/win32/win32_main.c src/platform/win32/win32_setup.c src/platform/win32/win32_export.c \
-        src/platform/common/zip_write.c src/platform/common/cli.c
+        src/platform/common/zip_write.c src/platform/common/cli.c \
+        src/platform/win32/win32_update.c src/platform/common/update.c
 HEADERS = src/core/mm.h src/core/mm_tables.h src/extract/mx.h src/extract/mx_tables.h src/extract/mx_oldext.h \
           src/art/mm_art.h src/art/mm_art_text.h
 # the project page the game links to (Settings > Pictures); the release workflow sets it from the repository
@@ -34,12 +35,18 @@ build/test_core: tests/test_core.c $(CORE) src/core/mm_game.c $(HEADERS)
 	mkdir -p build
 	$(CC) $(CFLAGS) -O1 -g -fsanitize=address,undefined -Isrc/core -Isrc/art tests/test_core.c $(CORE) -lm -o $@
 
+build/test_update: tests/test_update.c src/platform/common/update.c src/platform/common/update.h src/extract/mx_util.c
+	mkdir -p build
+	$(CC) $(CFLAGS) -O1 -g -fsanitize=address,undefined -Isrc/extract -Isrc/platform/common tests/test_update.c src/platform/common/update.c src/extract/mx_util.c -o $@
+
 build/test_mx: tests/test_mx.c $(EXTRACT) $(HEADERS)
 	$(CC) $(CFLAGS) -O1 -g -fsanitize=address,undefined -Isrc/extract tests/test_mx.c $(EXTRACT) -o $@
 
-test: build/test_core build/test_mx build/fixtures/tables.json
+test: build/test_core build/test_mx build/fixtures/tables.json build/test_update
 	build/test_core build/fixtures
 	build/test_mx
+	sh tests/make_update_fixtures.sh build/update-fixtures
+	build/test_update build/update-fixtures
 	python3 -I tests/test_extract.py
 
 test-data: build/test_core
@@ -68,7 +75,7 @@ test-extract: build/mmextract
 
 win32: build/win32/MindMaze.exe
 build/win32/MindMaze.exe: $(CORE) $(EXTRACT) $(WIN32) $(HEADERS) src/core/mm_game.c src/platform/win32/mindmaze.rc \
-                          src/platform/win32/mindmaze.ico src/platform/common/cli.h
+                          src/platform/win32/mindmaze.ico src/platform/common/cli.h src/platform/common/update.h
 	mkdir -p build/win32
 	cd src/platform/win32 && $(MINGW)-windres mindmaze.rc -O coff -o ../../../build/win32/mindmaze_res.o
 	$(MINGW)-gcc $(CFLAGS) -msse2 -mfpmath=sse -municode -mwindows -Isrc/core -Isrc/extract -Isrc/art -Isrc/platform/common $(CORE) src/core/mm_game.c $(EXTRACT) $(WIN32) \
@@ -88,7 +95,8 @@ build/web/mindmaze.js: $(CORE) src/core/mm_game.c $(WEB) $(HEADERS) src/platform
 	  -sEXPORTED_FUNCTIONS=$(WEB_EXPORTS) \
 	  -sEXPORTED_RUNTIME_METHODS=FS,HEAPU8,UTF8ToString,stringToUTF8,stringToNewUTF8,lengthBytesUTF8,addRunDependency,removeRunDependency \
 	  -o $@
-	cp src/platform/web/index.html src/platform/web/shell.js src/platform/web/extract-worker.js build/web/
+	cp src/platform/web/index.html src/platform/web/extract-worker.js build/web/
+	sed 's|@REPO_URL@|$(REPO_URL)|' src/platform/web/shell.js > build/web/shell.js
 	emcc -std=gnu11 -O2 -ffp-contract=off -Isrc/extract tools/extract/mmextract_web.c $(EXTRACT) \
 	  -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sFORCE_FILESYSTEM=1 -lworkerfs.js -sENVIRONMENT=worker \
 	  -sEXPORTED_FUNCTIONS=_main,_web_extract,_web_extract_error,_web_add_disc,_web_add_info \
@@ -116,8 +124,9 @@ android: build/web/mindmaze.js
 # SDL3 is linked statically (tools/build_sdl3.sh; pkg-config finds it through PKG_CONFIG_PATH), so the download needs
 # nothing installed. The fonts, the SoundFont and the icon sit next to the program (macOS: Contents/Resources).
 SDL = src/platform/sdl/sdl_main.c src/platform/sdl/sdl_audio.c src/platform/sdl/sdl_files.c src/platform/sdl/sdl_setup.c \
-      src/platform/common/text.c src/platform/common/music.c src/platform/common/zip_write.c src/platform/common/cli.c
-SDL_HEADERS = src/platform/sdl/sdl.h src/platform/common/text.h src/platform/common/music.h src/platform/common/zip_write.h src/platform/common/cli.h
+      src/platform/common/text.c src/platform/common/music.c src/platform/common/zip_write.c src/platform/common/cli.c \
+      src/platform/sdl/sdl_update.c src/platform/common/update.c
+SDL_HEADERS = src/platform/sdl/sdl.h src/platform/common/text.h src/platform/common/music.h src/platform/common/zip_write.h src/platform/common/cli.h src/platform/common/update.h
 SDL_SRC = $(CORE) src/core/mm_game.c $(EXTRACT) $(SDL)
 SDL_INC = -Isrc/core -Isrc/extract -Isrc/art -Isrc/platform/common
 

@@ -27,6 +27,11 @@
             background: rgba(0, 0, 0, .78); color: #d9d6c5; font: 16px/1.45 sans-serif; overflow: auto; z-index: 5; }
   #remote > div { width: min(560px, 100%); background: #1b1a17; border: 1px solid #6e655a; border-radius: 6px; padding: 14px 16px; }
   #remote h2 { font: bold 18px serif; color: #e8c872; margin: 0 0 6px; }
+  #update { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; padding: 16px;
+            background: rgba(0, 0, 0, .78); color: #d9d6c5; font: 16px/1.45 sans-serif; z-index: 6; }
+  #update > div { width: min(560px, 100%); background: #1b1a17; border: 1px solid #6e655a; border-radius: 6px; padding: 14px 16px; }
+  #update h2 { font: bold 18px serif; color: #e8c872; margin: 0 0 6px; }
+  #update button { margin: 6px 6px 0 0; }
   #import-progress { display: none; margin-top: 12px; }
   #import-track { height: 10px; background: #3a3833; border-radius: 5px; overflow: hidden; }
   #import-bar { height: 100%; width: 0; background: #e8c872; }
@@ -72,6 +77,15 @@
     <button class="mm alt" id="remote-go">Add</button></div>
   <p id="remote-error" style="color:#ff9a8a"></p>
   <button class="mm alt" id="remote-close">Cancel</button>
+</div></div>
+<!-- a newer app version (Android; shell.js MM.updateCheck, UpdaterPlugin.java) -->
+<div id="update"><div>
+  <h2>New version</h2>
+  <p id="update-text"></p>
+  <p id="update-step" class="small"></p>
+  <button class="mm" id="update-go">Update now</button>
+  <button class="mm alt" id="update-later">Later</button>
+  <button class="mm alt" id="update-never">Don't ask again</button>
 </div></div>
 <script src="shell.js"></script>
 <script src="mindmaze.js"></script>

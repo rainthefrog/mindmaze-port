@@ -129,13 +129,33 @@ Everything works from the game itself; the flags are for launchers and scripts. 
 | `--add-disc <path>` | add the questions of another Encarta disc |
 | `--export <file.zip>` | write the data file for the phone app |
 | `--prepare-art`, `--install-art` | write the HD / widescreen kit again; install finished pictures |
+| `--update` | install the newest release now (checksum checked) |
+| `--no-update-check` | do not look for a new version at start (for launchers that update the game themselves) |
 | `--help`, `--version` | |
 
 Game flags apply to that run only; the saved settings stay as they are (a change made in the game during the run is
-saved as usual). The actions (`--add-disc`, `--export`, `--prepare-art`, `--install-art`) run without a window and
+saved as usual). The actions (`--add-disc`, `--export`, `--prepare-art`, `--install-art`, `--update`) run without a window and
 exit: code 0 = done, 1 = failed (reason on stderr), 2 = wrong usage. With `--disc` they also build the data folder
 first, so `MindMaze --home ~/Games/mm --disc Encarta.iso --prepare-art` sets everything up without a window.
 `--opt=value` works as well as `--opt value`.
+
+## Updates
+
+Every version looks for a newer release on GitHub when it starts and asks before doing anything: **Update now**
+downloads the new version, checks its SHA-256 against the `.sha256` file of the release, puts it in place and
+starts again; your data, players and settings stay. **Later** asks again next time.
+
+- **Windows:** `MindMaze.exe` replaces itself (the old one is kept as `MindMaze.exe.old` until the next start).
+  MindMaze menu > *Check for Updates...*; *Look for Updates at Start* switches the question off and on.
+- **Linux:** the files in the unpacked `MindMaze` folder are replaced; *Don't ask again* switches the question off
+  (`update_check=1` in `mindmaze.ini` switches it back on).
+- **macOS:** `MindMaze.app` is replaced where it is. Move the app out of *Downloads* first (e.g. into
+  *Applications*): macOS runs an app that was never moved from a read-only copy, which cannot be updated.
+- **Android:** the app downloads the new APK and opens Android's install screen; tap *Update* there. The first
+  time, Android asks you to allow MindMaze to install apps.
+
+If the program's folder is read-only (e.g. `C:\Program Files`), MindMaze opens the release page instead.
+Launchers that update the game themselves start it with `--no-update-check`.
 
 For developers there is also a Python version of the extractor (`tools/extract/extract.py`, needs 7-Zip); both
 write the same data folder.

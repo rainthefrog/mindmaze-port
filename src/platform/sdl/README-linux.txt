@@ -6,6 +6,8 @@ the disc image (.iso) or ENCARTA.EXE / MINDMAZE.DB on the disc; you can also giv
 Everything stays in this folder (data/, mindmaze.ini, the players): delete it and the game is gone. Only if this
 folder is read-only does the data go to ~/.local/share/MindMaze. Command-line options for launchers: ./MindMaze --help
 (full screen, --home <dir>, --disc <path>, HD / widescreen, volumes, and actions without a window).
+Updates: at start MindMaze asks when a new version is out; "Update now" replaces the files in this folder and
+restarts (data and settings stay). ./MindMaze --update does it without a window; --no-update-check skips the question.
 
 Keys: F2 HD art, F3 widescreen, F11 or Alt+Enter full screen, Ctrl+N new game, Ctrl+M music, Ctrl+E sound effects,
 Ctrl+Q quit.

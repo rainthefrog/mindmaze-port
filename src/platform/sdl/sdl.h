@@ -44,3 +44,14 @@ int sdl_write_file(const char *path, const void *data, size_t len);   /* creates
 int sdl_setup(const char *source, const char *home, int headless);
 int sdl_add_disc_headless(const char *path);                    /* --add-disc; 1 = added */
 int sdl_export_headless(const char *zip);                       /* --export (sdl_files.c); 1 = written */
+
+/* sdl_files.c: one GET into memory on the calling thread (the updater); progress fn(ud, bytes, total or 0) */
+typedef void (*SdlProgress)(void *ud, long long now, long long total);
+char *sdl_download(const char *url, size_t *len, SdlProgress fn, void *ud);   /* malloc'd; NULL on failure */
+
+/* sdl_update.c: the built-in updater (../common/update.h). Tags of its plat_http_get (the core uses tags >= 0) */
+enum { SDL_UPD_TAG_START = -1, SDL_UPD_TAG_MANUAL = -2 };
+void sdl_update_start(void);                                    /* at start: look for a newer release (unless off) */
+void sdl_update_offer(const char *json, int manual);            /* its answer: ask the player, update, restart */
+int sdl_update_cli(void);                                       /* --update; 0 = updated or newest, 1 = failed */
+extern char **sdl_argv;                                         /* main's argv: the restart after an update */

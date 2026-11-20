@@ -27,6 +27,12 @@
 int win32_setup(HINSTANCE inst, const wchar_t *exedir, const char *home_arg, const char *disc_arg, int quiet,
                 wchar_t *home, int homelen);                                   /* win32_setup.c */
 int win32_add_disc_quiet(HINSTANCE inst, const wchar_t *datadir, const char *path);
+void win32_update_cleanup(void);                                  /* win32_update.c */
+int win32_update_cli(void);
+void win32_update_offer(HWND owner, const char *json, int manual);
+int upd_api_url(const char *setting, char *out, size_t n);           /* ../common/update.c */
+#define UPD_TAG_START (-1)                              /* plat_http_get tags of the update check (the core uses >= 0) */
+#define UPD_TAG_MENU (-2)
 int win32_export_zip(const wchar_t *datadir, const wchar_t *zippath, char *err, int errlen);   /* win32_export.c */
 static HWND busy_window(HINSTANCE inst, const wchar_t *text);
 static void export_for_phone(void);
@@ -50,6 +56,8 @@ void plat_export_data(void) { export_for_phone(); }
 #define IDM_WIDE 106
 #define IDM_FULL 107
 #define IDM_EXPORT 108
+#define IDM_UPDATE 109
+#define IDM_AUTOUPD 110
 
 static HWND g_hwnd;
 static HMENU g_menu;
@@ -187,7 +195,7 @@ static DWORD WINAPI http_thread(LPVOID arg)
         InternetSetOptionW(net, INTERNET_OPTION_RECEIVE_TIMEOUT, &to, sizeof to);
         wchar_t w[512];
         wide(j->url, w, 512);
-        HINTERNET h = InternetOpenUrlW(net, w, NULL, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
+        HINTERNET h = InternetOpenUrlW(net, w, NULL, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | (strncmp(j->url, "https:", 6) ? 0 : INTERNET_FLAG_SECURE), 0);
         if (h) {
             DWORD status = 0, sl = sizeof status;
             HttpQueryInfoW(h, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &status, &sl, NULL);
@@ -217,6 +225,21 @@ void plat_http_get(const char *url, int tag)
     HANDLE t = CreateThread(NULL, 0, http_thread, j, 0, NULL);
     if (t) CloseHandle(t);
     else { free(j); mm_http_done(tag, NULL, 0); }
+}
+
+/* the update check (win32_update.c): off with --no-update-check, update_check=0 in mindmaze.ini, or in a local build */
+static int update_off(void)
+{
+    char v[16];
+    return plat_get_setting("update_check", v, sizeof v) && atoi(v) == 0;
+}
+static void update_check(int manual)
+{
+    char api[600], v[512] = "";
+    plat_get_setting("update_url", v, sizeof v);
+    if (upd_api_url(v, api, sizeof api)) plat_http_get(api, manual ? UPD_TAG_MENU : UPD_TAG_START);
+    else if (manual) MessageBoxW(NULL, L"This build was not made from a GitHub repository, so it cannot look for updates.",
+                                 L"MindMaze", MB_ICONINFORMATION);
 }
 
 uint32_t plat_ticks(void) { return GetTickCount(); }
@@ -763,6 +786,7 @@ static void update_menu(void)
     EnableMenuItem(g_menu, IDM_HD, MF_BYCOMMAND | (mm_hd_available() ? MF_ENABLED : MF_GRAYED));
     CheckMenuItem(g_menu, IDM_WIDE, MF_BYCOMMAND | (mm_view_ext() ? MF_CHECKED : MF_UNCHECKED));
     EnableMenuItem(g_menu, IDM_WIDE, MF_BYCOMMAND | (mm_wide_available() ? MF_ENABLED : MF_GRAYED));
+    CheckMenuItem(g_menu, IDM_AUTOUPD, MF_BYCOMMAND | (update_off() ? MF_UNCHECKED : MF_CHECKED));
 }
 
 static int view_w(void) { return MM_W + 2 * mm_view_ext(); }   /* logical width: 636, or 764 in widescreen */
@@ -962,12 +986,15 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_WIDE: mm_cmd(CMD_WIDE); break;
         case IDM_FULL: set_fullscreen(!g_full); break;
         case IDM_EXPORT: export_for_phone(); break;
+        case IDM_UPDATE: update_check(1); break;
+        case IDM_AUTOUPD: plat_set_setting("update_check", update_off() ? "1" : "0"); break;
         }
         update_menu();
         return 0;
     case WM_HTTP_DONE: {                                  /* plat_http_get finished */
         HttpJob *j = (HttpJob *)lp;
-        mm_http_done(j->tag, j->data, j->len);
+        if (j->tag == UPD_TAG_START || j->tag == UPD_TAG_MENU) win32_update_offer(h, j->data, j->tag == UPD_TAG_MENU);
+        else mm_http_done(j->tag, j->data, j->len);
         free(j->data);
         free(j);
         return 0;
@@ -1088,10 +1115,15 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
     char **argv = utf8_args(&argc);
     char usage[256] = "";
     if (!argv || !cli_parse(argc, argv, usage, sizeof usage)) bad = 1;
+    win32_update_cleanup();                               /* the exe an update replaced (MindMaze.exe.old) */
     if (bad || cli.help || cli.version || cli.action) console_out();
     if (bad) { report(1, "MindMaze: %s\n", usage[0] ? usage : "cannot read the command line"); return 2; }
     if (cli.help) { report(0, "%s", cli_usage()); return 0; }
     if (cli.version) { report(0, "MindMaze %s\n", MM_VERSION); return 0; }
+    if (cli.update) {                                     /* --update needs no data folder: it runs first */
+        int r = win32_update_cli();
+        if (r || !(cli.add_disc || cli.export_zip || cli.prepare_art || cli.install_art)) return r;
+    }
 
     /* g_dir = the folder holding data\, mindmaze.ini and the player's files: next to the exe or in LOCALAPPDATA.
      * On the first start the data folder is built from the player's Encarta disc (win32_setup.c). */
@@ -1166,6 +1198,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
     AppendMenuW(sub, MF_STRING, IDM_FULL, L"&Full Screen\tF11");
     AppendMenuW(sub, MF_SEPARATOR, 0, NULL);
     AppendMenuW(sub, MF_STRING, IDM_EXPORT, L"&Export Data for the Phone App...");
+    AppendMenuW(sub, MF_STRING, IDM_UPDATE, L"Check for &Updates...");
+    AppendMenuW(sub, MF_STRING, IDM_AUTOUPD, L"&Look for Updates at Start");
     AppendMenuW(g_menu, MF_POPUP, (UINT_PTR)sub, L"&MindMaze");
 
     /* biggest whole scale that fits the work area */
@@ -1198,6 +1232,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
     ShowWindow(g_hwnd, show);
     if (cli.fullscreen == 1) set_fullscreen(1);         /* --fullscreen */
     SetTimer(g_hwnd, TIMER_ID, 50, NULL);
+    if (!update_off()) update_check(0);                   /* a newer release? (win32_update.c asks the player) */
     MSG m;
     while (GetMessageW(&m, NULL, 0, 0) > 0) {
         TranslateMessage(&m);

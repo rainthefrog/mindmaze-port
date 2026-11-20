@@ -380,6 +380,10 @@ static void set_icon(void)                               /* Linux: the window's 
 static int run_actions(void)
 {
     if (!SDL_Init(0)) { fprintf(stderr, "MindMaze: %s\n", SDL_GetError()); return 1; }
+    if (cli.update) {                                     /* --update needs no data folder: it runs first */
+        int r = sdl_update_cli();
+        if (r || !(cli.add_disc || cli.export_zip || cli.prepare_art || cli.install_art)) { SDL_Quit(); return r; }
+    }
     int ok = sdl_setup(cli.disc, cli.home, 1);
     if (ok) {
         sdl_files_init();
@@ -411,6 +415,7 @@ int main(int argc, char **argv)
     if (cli.version) { puts("MindMaze " MM_VERSION); return 0; }
     const char *source = cli.disc;                        /* the first start's disc */
     SDL_SetAppMetadata("MindMaze", MM_VERSION, "io.github.mindmaze_port");
+    sdl_argv = argv;                                      /* the restart after an update */
     if (cli.action) return run_actions();                 /* no window */
     if (!SDL_Init(SDL_INIT_VIDEO)) { fprintf(stderr, "MindMaze: %s\n", SDL_GetError()); return 1; }
     sdl_event_base = SDL_RegisterEvents(SDL_EV_COUNT);
@@ -458,6 +463,7 @@ int main(int argc, char **argv)
     layout();
     SDL_StartTextInput(sdl_window);
     g_game_on = 1;
+    sdl_update_start();                                   /* a newer release? (sdl_update.c asks the player) */
     if (g_quit_pending) { mm_shutdown(); g_running = 0; }
 
     Uint64 next = SDL_GetTicks();

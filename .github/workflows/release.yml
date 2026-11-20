@@ -1,9 +1,16 @@
 name: Release
 # Pushing a version tag (v1.0.0, ...) builds the Windows exe, the Linux tarball, the Android APK and the macOS app
 # and attaches them to a GitHub Release. Nothing of Encarta is in any of them: players import their own disc.
-# No release signing: the APK carries Android's automatic debug signature (Android installs only signed APKs). Each
-# build's debug key differs, so a new version may need the old app uninstalled first. The macOS app carries only an
-# ad-hoc signature (what Apple Silicon needs to run it at all; no Apple ID, not notarized).
+#
+# - The release's title is "MindMaze <version>" and its text is docs/release-notes/<tag>.md (same layout for every
+#   release; copy the previous file). The workflow stops before building if that file is missing.
+# - Every download gets a "<file>.sha256" next to it: the built-in updaters (src/platform/common/update.c, Android
+#   UpdaterPlugin.java) refuse a download whose checksum differs.
+# - The APK is signed with the app's fixed key (secrets ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+#   ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD; key kept outside the repository). Android installs an update only over
+#   an app with the same key, so the release stops if the APK carries any other certificate.
+# - The macOS app carries only an ad-hoc signature (what Apple Silicon needs to run it at all; no Apple ID, not
+#   notarized).
 on:
   push:
     tags: ["v*"]
@@ -11,11 +18,17 @@ on:
 permissions:
   contents: write
 
+env:
+  # SHA-256 of the app's signing certificate (public: any copy of the APK shows it)
+  APK_CERT_SHA256: "49:CB:E0:86:91:89:0C:F9:70:8E:23:9B:86:9B:77:61:6B:9D:D9:63:08:0E:BE:1C:54:70:01:08:CE:16:64:4D"
+
 jobs:
   release:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Release notes present
+        run: test -s "docs/release-notes/${GITHUB_REF_NAME}.md" || { echo "::error::docs/release-notes/${GITHUB_REF_NAME}.md is missing"; exit 1; }
       - name: Install the compilers
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc make python3 gcc-mingw-w64-i686
       - name: No Encarta content in the repository
@@ -41,18 +54,41 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Android APK
+      - name: Android APK (signed with the app's fixed key)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          test -n "$KEYSTORE_BASE64" || { echo "::error::secret ANDROID_KEYSTORE_BASE64 is missing"; exit 1; }
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/mindmaze-release.jks"
+          export ANDROID_KEYSTORE="$RUNNER_TEMP/mindmaze-release.jks"
           export APP_VERSION_NAME="${GITHUB_REF_NAME#v}" APP_VERSION_CODE="${{ github.run_number }}"
           make android
+          rm -f "$RUNNER_TEMP/mindmaze-release.jks"
+      - name: The APK carries the app's certificate
+        run: |
+          got=$(keytool -printcert -jarfile build/android/MindMaze.apk | sed -n 's/^[[:space:]]*SHA256: //p' | head -1 | tr -d '\r')
+          echo "APK certificate: $got"
+          test "$got" = "$APK_CERT_SHA256" || { echo "::error::the APK is not signed with the app's key"; exit 1; }
+      - name: Checksums for the updaters
+        run: |
+          for f in build/win32/MindMaze.exe build/linux/MindMaze-linux-x86_64.tar.gz build/android/MindMaze.apk; do
+            (cd "$(dirname "$f")" && sha256sum "$(basename "$f")" > "$(basename "$f").sha256")
+          done
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          name: MindMaze ${{ github.ref_name }}
+          body_path: docs/release-notes/${{ github.ref_name }}.md
           files: |
             build/win32/MindMaze.exe
+            build/win32/MindMaze.exe.sha256
             build/linux/MindMaze-linux-x86_64.tar.gz
+            build/linux/MindMaze-linux-x86_64.tar.gz.sha256
             build/android/MindMaze.apk
+            build/android/MindMaze.apk.sha256
 
   # The macOS app is added to the same release afterwards (needs: release, so the two jobs never race to create it;
   # a failure here leaves the other downloads released).
@@ -71,7 +107,10 @@ jobs:
           make macos REPO_URL=https://github.com/${{ github.repository }}
           lipo -info build/macos/MindMaze.app/Contents/MacOS/MindMaze
           codesign --verify --deep --strict --verbose=2 build/macos/MindMaze.app
+          cd build/macos && shasum -a 256 MindMaze-macos.zip > MindMaze-macos.zip.sha256
       - name: Attach to the release
         uses: softprops/action-gh-release@v2
         with:
-          files: build/macos/MindMaze-macos.zip
+          files: |
+            build/macos/MindMaze-macos.zip
+            build/macos/MindMaze-macos.zip.sha256

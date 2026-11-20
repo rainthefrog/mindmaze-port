@@ -252,6 +252,7 @@ void plat_open_data_folder(const char *rel)
 typedef void CURL;
 enum { CURLOPT_WRITEDATA = 10001, CURLOPT_URL = 10002, CURLOPT_USERAGENT = 10018, CURLOPT_WRITEFUNCTION = 20011,
        CURLOPT_TIMEOUT = 13, CURLOPT_FOLLOWLOCATION = 52, CURLOPT_CONNECTTIMEOUT = 78, CURLOPT_NOSIGNAL = 99,
+       CURLOPT_NOPROGRESS = 43, CURLOPT_XFERINFODATA = 10057, CURLOPT_XFERINFOFUNCTION = 20219,
        CURLINFO_RESPONSE_CODE = 0x200002 };
 static struct {
     CURL *(*init)(void);
@@ -342,9 +343,64 @@ void plat_http_get(const char *url, int tag)
 void sdl_http_done_event(void *job)
 {
     HttpJob *j = job;
-    mm_http_done(j->tag, j->data, (int)j->len);
+    if (j->tag < 0) sdl_update_offer(j->data, j->tag == SDL_UPD_TAG_MANUAL);   /* the update check (sdl_update.c) */
+    else mm_http_done(j->tag, j->data, (int)j->len);
     free(j->data);
     free(j);
+}
+
+/* ---- the updater's downloads (sdl_update.c): one GET into memory on the calling thread, up to 256 MB ---- */
+typedef struct { char *data; size_t len, cap; SdlProgress fn; void *ud; } Dl;
+
+static size_t dl_write(char *p, size_t size, size_t n, void *ud)
+{
+    Dl *d = ud;
+    size_t k = size * n;
+    if (d->len + k > (256u << 20)) return 0;
+    if (d->len + k + 1 > d->cap) {
+        size_t cap = (d->len + k + 1) * 2;
+        char *nd = realloc(d->data, cap);
+        if (!nd) return 0;
+        d->data = nd;
+        d->cap = cap;
+    }
+    memcpy(d->data + d->len, p, k);
+    d->len += k;
+    d->data[d->len] = 0;
+    return k;
+}
+static int dl_progress(void *ud, long long total, long long now, long long ut, long long un)
+{
+    (void)ut, (void)un;
+    Dl *d = ud;
+    if (d->fn) d->fn(d->ud, now, total);
+    return 0;
+}
+
+char *sdl_download(const char *url, size_t *len, SdlProgress fn, void *ud)
+{
+    *len = 0;
+    if (!curl_load()) return NULL;
+    Dl d = {NULL, 0, 0, fn, ud};
+    CURL *c = g_curl.init();
+    long status = 0;
+    if (!c) return NULL;
+    g_curl.setopt(c, CURLOPT_URL, url);
+    g_curl.setopt(c, CURLOPT_USERAGENT, "MindMaze-updater");
+    g_curl.setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+    g_curl.setopt(c, CURLOPT_NOSIGNAL, 1L);
+    g_curl.setopt(c, CURLOPT_CONNECTTIMEOUT, 20L);
+    g_curl.setopt(c, CURLOPT_TIMEOUT, 600L);
+    g_curl.setopt(c, CURLOPT_WRITEFUNCTION, dl_write);
+    g_curl.setopt(c, CURLOPT_WRITEDATA, &d);
+    g_curl.setopt(c, CURLOPT_NOPROGRESS, 0L);
+    g_curl.setopt(c, CURLOPT_XFERINFOFUNCTION, dl_progress);
+    g_curl.setopt(c, CURLOPT_XFERINFODATA, &d);
+    if (g_curl.perform(c) == 0) g_curl.getinfo(c, CURLINFO_RESPONSE_CODE, &status);
+    g_curl.cleanup(c);
+    if (status != 200 || !d.data) { free(d.data); return NULL; }
+    *len = d.len;
+    return d.data;
 }
 
 /* ---- Settings > "Export data for the phone app": the data folder as one .zip (../common/zip_write.c) ---- */

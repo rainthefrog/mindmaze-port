@@ -6,7 +6,7 @@
 #include "mm.h"
 #include "mm_tables.h"
 
-CliOptions cli = {-1, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0};
+CliOptions cli = {-1, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0};
 
 #define MAX_OVERRIDES 32
 static struct { char key[64]; char value[512]; } g_over[MAX_OVERRIDES];
@@ -61,6 +61,7 @@ const char *cli_usage(void)
            "      --sound <0-100>      sound effects volume (0 = off)\n"
            "      --no-title           skip the title screen\n"
            "      --set <key>=<value>  any mindmaze.ini setting\n"
+           "      --no-update-check    do not look for a new version at start (for launchers that update)\n"
            "\n"
            "Folders:\n"
            "      --home <dir>         keep everything (data/, mindmaze.ini, players) in <dir>; default: next to\n"
@@ -73,6 +74,7 @@ const char *cli_usage(void)
            "      --export <file.zip>  write the data file for the phone app\n"
            "      --prepare-art        write the kit for HD / widescreen pictures again (data/art/work)\n"
            "      --install-art        install finished HD / widescreen pictures from data/art/work\n"
+           "      --update             install the newest release now (from GitHub, checksum checked)\n"
            "\n"
            "  -h, --help               this text\n"
            "      --version            the version\n";
@@ -136,6 +138,8 @@ int cli_parse(int argc, char **argv, char *err, int errlen)
         else if (!strcmp(a, "--export")) { VALUE(); cli.export_zip = v; cli.action = 1; }
         else if (!strcmp(a, "--prepare-art")) { cli.prepare_art = 1; cli.action = 1; }
         else if (!strcmp(a, "--install-art")) { cli.install_art = 1; cli.action = 1; }
+        else if (!strcmp(a, "--update")) { cli.update = 1; cli.action = 1; }
+        else if (!strcmp(a, "--no-update-check")) override("update_check", "0");
         else if (!strncmp(a, "-psn_", 5)) {}                         /* old macOS Finder adds one */
         else if (a[0] == '-' && a[1]) { snprintf(err, (size_t)errlen, "unknown option %s (see --help)", a); return 0; }
         else if (!cli.disc) cli.disc = a;                            /* the bare argument: the disc */

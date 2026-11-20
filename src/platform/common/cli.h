@@ -3,7 +3,7 @@
  * scripts. Settings given as flags apply to this run only (they are not written to mindmaze.ini); a change made in the
  * game during the run (F2, Settings) is saved as usual and wins from then on.
  *
- * Actions (--add-disc, --export, --prepare-art, --install-art) run without the game window and end the program:
+ * Actions (--add-disc, --export, --prepare-art, --install-art, --update) run without the game window and end the program:
  * exit code 0 = done, 1 = failed (the reason on stderr), 2 = wrong usage. */
 #pragma once
 
@@ -18,6 +18,7 @@ typedef struct {
     const char *add_disc;        /* --add-disc <path> */
     const char *export_zip;      /* --export <file.zip> */
     int prepare_art, install_art;
+    int update;                  /* --update: install the newest release (no window) */
     int help, version;
     int action;                  /* any action given: no game window */
 } CliOptions;

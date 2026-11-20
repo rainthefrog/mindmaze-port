@@ -202,6 +202,7 @@ function startGame() {
   MM.canvas.focus();
   window.mmReady = true;
   MM.takePendingLink();
+  setTimeout(MM.updateCheck, 1500);                         /* a newer app? (Android only) */
 }
 
 /* ---- import: the player's Encarta disc image (2006, or 95 to 98) or the 2006 files -> /data (IndexedDB), with the built-in extractor ---- */
@@ -521,3 +522,68 @@ window.addEventListener("keydown", function (e) {
   if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) Module._web_char(e.key.codePointAt(0));
   if (k === 8 || k === 9 || k === 0x71 || k === 0x72 || e.key === " ") e.preventDefault();
 });
+
+/* ---- built-in updater, Android app (CHANGE 2026-11-20; UpdaterPlugin.java, desktop: src/platform/common/update.c).
+ * At start the newest GitHub release is asked for; when its tag is newer than this app's version, #update offers it:
+ * Update now (download MindMaze.apk + .sha256, checksum, Android's install screen), Later, Don't ask again
+ * (localStorage update_check = 0). Browsers (no Capacitor) and local builds (no repository address) skip it. ---- */
+var UPDATE_REPO = "@REPO_URL@";                           /* set by the Makefile from REPO_URL */
+function updNewer(tag, cur) {
+  var p = function (v) { return String(v || "").replace(/^v/i, "").split(/[^0-9]/).slice(0, 4).map(function (x) { return parseInt(x, 10); }); };
+  var a = p(tag), b = p(cur);
+  if (isNaN(a[0]) || isNaN(b[0])) return false;
+  for (var i = 0; i < 4; i++) {
+    var x = a[i] || 0, y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+function updAsset(rel, name) {
+  var a = (rel.assets || []).filter(function (x) { return x.name === name; })[0];
+  return a ? a.browser_download_url : null;
+}
+MM.updateCheck = function (manual) {
+  var P = window.Capacitor && window.Capacitor.Plugins, U = P && P.Updater, App = P && P.App;
+  var m = /^https:\/\/github\.com\/([^/]+\/[^/]+)/.exec(UPDATE_REPO);
+  if (!U || !App || !m || /\/OWNER\//.test(UPDATE_REPO + "/")) return;
+  try { if (!manual && localStorage.getItem("update_check") === "0") return; } catch (e) {}
+  App.getInfo().then(function (info) {
+    return fetch("https://api.github.com/repos/" + m[1] + "/releases/latest", { headers: { Accept: "application/vnd.github+json" } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (rel) {
+        if (!rel || !updNewer(rel.tag_name, info.version)) return;
+        var apk = updAsset(rel, "MindMaze.apk"), sum = updAsset(rel, "MindMaze.apk.sha256");
+        if (apk && sum) updShow(rel, info.version, apk, sum);
+      });
+  }).catch(function () {});
+};
+function updShow(rel, cur, apk, sum) {
+  var box = document.getElementById("update"), say = document.getElementById("update-step");
+  document.getElementById("update-text").textContent = "MindMaze " + String(rel.tag_name).replace(/^v/i, "") +
+    " is available (you have " + cur + "). Update now? The app downloads it (about 40 MB), checks it and opens " +
+    "Android's install screen. Your imported data stays.";
+  say.textContent = "";
+  box.style.display = "flex";
+  var U = window.Capacitor.Plugins.Updater, busy = false;
+  document.getElementById("update-go").onclick = function () {
+    if (busy) return;
+    busy = true;
+    say.style.color = "#d9d6c5";
+    say.textContent = "Downloading...";
+    var h = U.addListener("progress", function (p) { if (p.pct >= 0) say.textContent = "Downloading... " + p.pct + "%"; });
+    U.install({ url: apk, sumUrl: sum }).then(function () {
+      say.textContent = "Android's install screen is open: tap Update there.";
+    }, function (e) {
+      say.style.color = "#ff9a8a";
+      say.textContent = (e && e.message) === "permission"
+        ? "Allow MindMaze to install apps on the page that opened, then come back and tap Update now again."
+        : "The update did not work: " + ((e && e.message) || "error") + ".";
+    }).then(function () { busy = false; Promise.resolve(h).then(function (x) { if (x && x.remove) x.remove(); }); });
+  };
+  document.getElementById("update-later").onclick = function () { box.style.display = "none"; MM.canvas.focus(); };
+  document.getElementById("update-never").onclick = function () {
+    try { localStorage.setItem("update_check", "0"); } catch (e) {}
+    box.style.display = "none";
+    MM.canvas.focus();
+  };
+}
