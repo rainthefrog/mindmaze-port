@@ -23,7 +23,10 @@
 #include <string.h>
 #include "mm.h"
 #include "mm_art.h"
-int win32_setup(HINSTANCE inst, const wchar_t *exedir, wchar_t *home, int homelen);   /* win32_setup.c */
+#include "cli.h"
+int win32_setup(HINSTANCE inst, const wchar_t *exedir, const char *home_arg, const char *disc_arg, int quiet,
+                wchar_t *home, int homelen);                                   /* win32_setup.c */
+int win32_add_disc_quiet(HINSTANCE inst, const wchar_t *datadir, const char *path);
 int win32_export_zip(const wchar_t *datadir, const wchar_t *zippath, char *err, int errlen);   /* win32_export.c */
 static HWND busy_window(HINSTANCE inst, const wchar_t *text);
 static void export_for_phone(void);
@@ -263,6 +266,7 @@ MMImage *plat_load_png(const char *relpath)
 /* ---- settings (UTF-16 ini so player names keep any characters) ---- */
 int plat_get_setting(const char *key, char *buf, int n)
 {
+    if (cli_setting(key, buf, n)) return 1;                   /* a command-line flag, this run only (../common/cli.h) */
     wchar_t k[128], v[1024];
     GetPrivateProfileStringW(L"MindMaze", wide(key, k, 128), L"\x01", v, 1024, g_ini);
     if (v[0] == 1 && !v[1]) return 0;
@@ -272,6 +276,7 @@ int plat_get_setting(const char *key, char *buf, int n)
 
 void plat_set_setting(const char *key, const char *value)
 {
+    cli_setting_forget(key);                                 /* changed in the game: the saved value counts from now on */
     wchar_t k[128], v[1024];
     WritePrivateProfileStringW(L"MindMaze", wide(key, k, 128), value ? wide(value, v, 1024) : NULL, g_ini);
 }
@@ -1024,6 +1029,48 @@ static HWND busy_window(HINSTANCE inst, const wchar_t *text)
     return win;
 }
 
+/* ---- command line (../common/cli.h) ---- */
+/* the arguments as UTF-8 (cli_parse reads UTF-8; paths go back to UTF-16 where they are used); never freed */
+static char **utf8_args(int *argc)
+{
+    wchar_t **wa = CommandLineToArgvW(GetCommandLineW(), argc);
+    if (!wa) return NULL;
+    char **a = calloc((size_t)*argc + 1, sizeof *a);
+    for (int i = 0; a && i < *argc; i++) {
+        int n = WideCharToMultiByte(CP_UTF8, 0, wa[i], -1, NULL, 0, NULL, NULL);
+        if ((a[i] = malloc((size_t)n))) WideCharToMultiByte(CP_UTF8, 0, wa[i], -1, a[i], n, NULL, NULL);
+        else a[i] = "";
+    }
+    LocalFree(wa);
+    return a;
+}
+
+/* MindMaze.exe is a window program: its output reaches a launcher's pipe or a redirected file as it is; started in a
+ * console it writes into that console (the prompt may already be back). With neither, report() shows a message box. */
+static int g_have_out;
+static void console_out(void)
+{
+    HANDLE o = GetStdHandle(STD_OUTPUT_HANDLE), e = GetStdHandle(STD_ERROR_HANDLE);
+    if (o && o != INVALID_HANDLE_VALUE && e && e != INVALID_HANDLE_VALUE) { g_have_out = 1; return; }
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        if (!o || o == INVALID_HANDLE_VALUE) freopen("CONOUT$", "w", stdout);
+        if (!e || e == INVALID_HANDLE_VALUE) freopen("CONOUT$", "w", stderr);
+        g_have_out = 1;
+    }
+}
+static void report(int error, const char *fmt, ...)
+{
+    char buf[4096];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    if (g_have_out) { fputs(buf, error ? stderr : stdout); fflush(error ? stderr : stdout); return; }
+    wchar_t w[4096];
+    MultiByteToWideChar(CP_UTF8, 0, buf, -1, w, 4096);
+    MessageBoxW(NULL, w, L"MindMaze", error ? MB_ICONWARNING : MB_ICONINFORMATION);
+}
+
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
 {
     (void)prev;
@@ -1036,9 +1083,19 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
     GetModuleFileNameW(NULL, exedir, MAX_PATH);
     wchar_t *slash = wcsrchr(exedir, L'\\');
     if (slash) slash[1] = 0;
+    /* command-line options (../common/cli.h): MindMaze.exe --help */
+    int argc = 0, bad = 0;
+    char **argv = utf8_args(&argc);
+    char usage[256] = "";
+    if (!argv || !cli_parse(argc, argv, usage, sizeof usage)) bad = 1;
+    if (bad || cli.help || cli.version || cli.action) console_out();
+    if (bad) { report(1, "MindMaze: %s\n", usage[0] ? usage : "cannot read the command line"); return 2; }
+    if (cli.help) { report(0, "%s", cli_usage()); return 0; }
+    if (cli.version) { report(0, "MindMaze %s\n", MM_VERSION); return 0; }
+
     /* g_dir = the folder holding data\, mindmaze.ini and the player's files: next to the exe or in LOCALAPPDATA.
      * On the first start the data folder is built from the player's Encarta disc (win32_setup.c). */
-    if (!win32_setup(inst, exedir, g_dir, MAX_PATH)) return 0;
+    if (!win32_setup(inst, exedir, cli.home, cli.disc, cli.action, g_dir, MAX_PATH)) return cli.action ? 1 : 0;
     swprintf(g_datadir, MAX_PATH, L"%lsdata\\", g_dir);
     swprintf(g_ini, MAX_PATH, L"%lsmindmaze.ini", g_dir);
     if (GetFileAttributesW(g_ini) == INVALID_FILE_ATTRIBUTES) {        /* UTF-16 ini: Unicode player names */
@@ -1047,6 +1104,33 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
     }
 
     (void)cmdline;
+    /* the action flags (--add-disc, --export, --prepare-art, --install-art): no window; 0 = all done, 1 = one failed */
+    if (cli.action) {
+        char rep[4096];
+        int ok = 1;
+        if (cli.add_disc) ok = win32_add_disc_quiet(inst, g_datadir, cli.add_disc);
+        if (ok && cli.prepare_art) {
+            ok = mm_art_prepare(1, rep, sizeof rep);
+            report(!ok, "%s\n", rep);
+        }
+        if (ok && cli.install_art) {
+            ok = mm_art_install(rep, sizeof rep) >= 0;        /* 0 = no new pictures: not an error */
+            report(!ok, "%s\n", rep);
+        }
+        if (ok && cli.export_zip) {
+            wchar_t zip[MAX_PATH * 2], *w = NULL;
+            int n = MultiByteToWideChar(CP_UTF8, 0, cli.export_zip, -1, NULL, 0);
+            if (n > 0 && (w = malloc(sizeof(wchar_t) * (size_t)n))) MultiByteToWideChar(CP_UTF8, 0, cli.export_zip, -1, w, n);
+            if (!w || !GetFullPathNameW(w, MAX_PATH * 2, zip, NULL)) ok = 0;
+            free(w);
+            char msg[256] = "the file name is not valid";
+            if (ok) ok = win32_export_zip(g_datadir, zip, msg, sizeof msg);
+            if (ok) report(0, "Saved %s (%s). It holds pictures from your Encarta disc: keep it for yourself.\n", cli.export_zip, msg);
+            else report(1, "MindMaze: the data could not be exported: %s\n", msg);
+        }
+        return ok ? 0 : 1;
+    }
+
     /* built-in art tools (src/art): the sheets are made once, new agent results installed at start */
     {
         char rep[4096];
@@ -1112,6 +1196,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
     if (mm_view_ext()) size_window(0);                    /* the window was made before the setting was read */
     update_menu();
     ShowWindow(g_hwnd, show);
+    if (cli.fullscreen == 1) set_fullscreen(1);         /* --fullscreen */
     SetTimer(g_hwnd, TIMER_ID, 50, NULL);
     MSG m;
     while (GetMessageW(&m, NULL, 0, 0) > 0) {

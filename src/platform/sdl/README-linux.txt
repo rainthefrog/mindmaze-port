@@ -3,7 +3,9 @@ MindMaze for Linux (x86_64) - https://github.com/rainthefrog/mindmaze-port
 Start ./MindMaze (nothing needs to be installed). On the first start it looks for a mounted Encarta disc, or asks for
 the disc image (.iso) or ENCARTA.EXE / MINDMAZE.DB on the disc; you can also give the image as an argument:
   ./MindMaze ~/Downloads/Encarta.iso
-The game's data goes to ~/.local/share/MindMaze (or a data/ folder next to the program if you put one there).
+Everything stays in this folder (data/, mindmaze.ini, the players): delete it and the game is gone. Only if this
+folder is read-only does the data go to ~/.local/share/MindMaze. Command-line options for launchers: ./MindMaze --help
+(full screen, --home <dir>, --disc <path>, HD / widescreen, volumes, and actions without a window).
 
 Keys: F2 HD art, F3 widescreen, F11 or Alt+Enter full screen, Ctrl+N new game, Ctrl+M music, Ctrl+E sound effects,
 Ctrl+Q quit.

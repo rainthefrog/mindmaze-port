@@ -17,6 +17,7 @@
 #include "mm.h"
 #include "mm_art.h"
 #include "text.h"
+#include "cli.h"
 #include "../../third_party/stb_image.h"
 
 SDL_Window *sdl_window;
@@ -374,15 +375,43 @@ static void set_icon(void)                               /* Linux: the window's 
     stbi_image_free(px);
 }
 
+/* the action flags (--add-disc, --export, --prepare-art, --install-art): no window, messages on stdout / stderr.
+ * The data folder must exist, or come from --disc. Exit code 0 = all done, 1 = one failed. */
+static int run_actions(void)
+{
+    if (!SDL_Init(0)) { fprintf(stderr, "MindMaze: %s\n", SDL_GetError()); return 1; }
+    int ok = sdl_setup(cli.disc, cli.home, 1);
+    if (ok) {
+        sdl_files_init();
+        char rep[4096];
+        if (ok && cli.add_disc) ok = sdl_add_disc_headless(cli.add_disc);
+        if (ok && cli.prepare_art) {
+            ok = mm_art_prepare(1, rep, sizeof rep);
+            printf("%s%s", rep, *rep && rep[strlen(rep) - 1] != '\n' ? "\n" : "");
+        }
+        if (ok && cli.install_art) {
+            ok = mm_art_install(rep, sizeof rep) >= 0;         /* 0 = no new pictures: not an error */
+            printf("%s%s", rep, *rep && rep[strlen(rep) - 1] != '\n' ? "\n" : "");
+        }
+        if (ok && cli.export_zip) ok = sdl_export_headless(cli.export_zip);
+    }
+    SDL_Quit();
+    return ok ? 0 : 1;
+}
+
 static int art_prepare_job(void *arg) { char rep[4096]; (void)arg; return mm_art_prepare(0, rep, sizeof rep); }
 static int art_install_job(void *arg) { char rep[4096]; (void)arg; return mm_art_install(rep, sizeof rep); }
 
 int main(int argc, char **argv)
 {
-    const char *source = NULL;                            /* the first start's disc: a path on the command line */
-    for (int i = 1; i < argc; i++)
-        if (strncmp(argv[i], "-psn_", 5)) source = argv[i];   /* (old macOS Finder adds a -psn_ argument) */
-    SDL_SetAppMetadata("MindMaze", NULL, "io.github.mindmaze_port");
+    /* command-line options (../common/cli.h): MindMaze --help */
+    char usage[256];
+    if (!cli_parse(argc, argv, usage, sizeof usage)) { fprintf(stderr, "MindMaze: %s\n", usage); return 2; }
+    if (cli.help) { fputs(cli_usage(), stdout); return 0; }
+    if (cli.version) { puts("MindMaze " MM_VERSION); return 0; }
+    const char *source = cli.disc;                        /* the first start's disc */
+    SDL_SetAppMetadata("MindMaze", MM_VERSION, "io.github.mindmaze_port");
+    if (cli.action) return run_actions();                 /* no window */
     if (!SDL_Init(SDL_INIT_VIDEO)) { fprintf(stderr, "MindMaze: %s\n", SDL_GetError()); return 1; }
     sdl_event_base = SDL_RegisterEvents(SDL_EV_COUNT);
     g_prog_lock = SDL_CreateMutex();
@@ -409,7 +438,7 @@ int main(int argc, char **argv)
     sdl_status("MindMaze", NULL, -1);
 
     /* the data folder; on the first start it is built from the player's disc (sdl_setup.c) */
-    if (!sdl_setup(source) || g_quit_pending) { SDL_Quit(); return 0; }
+    if (!sdl_setup(source, cli.home, 0) || g_quit_pending) { SDL_Quit(); return 0; }
     sdl_files_init();
     sdl_audio_init();
 
@@ -425,6 +454,7 @@ int main(int argc, char **argv)
         return 1;
     }
     if (mm_view_ext()) size_window(0, 1);                 /* the window was made before the setting was read */
+    if (cli.fullscreen == 1) { SDL_SetWindowFullscreen(sdl_window, true); SDL_SyncWindow(sdl_window); }   /* --fullscreen */
     layout();
     SDL_StartTextInput(sdl_window);
     g_game_on = 1;

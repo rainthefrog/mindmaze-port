@@ -39,5 +39,8 @@ void *sdl_slurp(const char *path, int *size);                   /* malloc'd, zer
 int sdl_write_file(const char *path, const void *data, size_t len);   /* creates the folders; 1 = ok */
 
 /* sdl_setup.c: find the data folder, or build it on the first start (source: a disc image / folder given on the
- * command line, or NULL). 1 = sdl_home / sdl_data set, 0 = the player cancelled or it failed */
-int sdl_setup(const char *source);
+ * command line, or NULL; home: --home or NULL; headless: an action flag runs - no window, no questions, messages on
+ * stderr). 1 = sdl_home / sdl_data set, 0 = the player cancelled or it failed */
+int sdl_setup(const char *source, const char *home, int headless);
+int sdl_add_disc_headless(const char *path);                    /* --add-disc; 1 = added */
+int sdl_export_headless(const char *zip);                       /* --export (sdl_files.c); 1 = written */

@@ -2,18 +2,25 @@
  * extractor (src/extract). Nothing else needs to be installed: the exe is the whole download.
  *
  * Where the data lives ("home" = the folder holding data\, mindmaze.ini and the player's files):
+ *   0. --home <dir> on the command line, if given;
  *   1. next to MindMaze.exe, if data\tables.json is there, or if that folder is writable (portable use);
  *   2. otherwise %LOCALAPPDATA%\MindMaze\ (e.g. when the exe sits in Program Files).
+ * The disc: --disc <path> (or the bare argument) skips the questions. quiet = an action flag runs: no windows,
+ * messages on stderr (../common/cli.h).
  */
 #include <windows.h>
 #include <commdlg.h>
+#include <shlobj.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 #include "mx.h"
+#include "cli.h"
 
-int win32_setup(HINSTANCE inst, const wchar_t *exedir, wchar_t *home, int homelen);
+int win32_setup(HINSTANCE inst, const wchar_t *exedir, const char *home_arg, const char *disc_arg, int quiet,
+                wchar_t *home, int homelen);
+int win32_add_disc_quiet(HINSTANCE inst, const wchar_t *datadir, const char *path);
 
 static char *utf8(const wchar_t *w)
 {
@@ -96,9 +103,17 @@ static int io_write(MXIO *io, const char *rel, const void *d, size_t n)
     int ok = WriteFile(h, d, (DWORD)n, &put, NULL) && put == n;
     return CloseHandle(h) && ok;
 }
+static int g_quiet;                                           /* an action flag runs: no windows, progress on stderr */
 static void io_progress(MXIO *io, int pct, const char *step)
 {
     (void)io;
+    if (g_quiet) {
+        static int last = -100;
+        if (pct >= last && pct < last + 10 && pct != 100) return;  /* every 10 % (a new step may start at 0 again) */
+        last = pct;
+        fprintf(stderr, "  %3d%% %s\n", pct, step ? step : "");
+        return;
+    }
     if (!g_text) return;
     wchar_t buf[200], *w = wide16(step);
     swprintf(buf, 200, L"%ls\n\n%ls (%d%%)", g_title, w ? w : L"", pct);
@@ -163,11 +178,11 @@ static int run_extract2(HINSTANCE inst, const wchar_t *src, const wchar_t *datad
 {
     wcscpy(g_out, datadir);
     CreateDirectoryW(datadir, NULL);
-    /* small progress window */
+    /* small progress window (none for an action flag) */
     RECT wa;
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
     int w = 460, h = 130;
-    HWND win = CreateWindowExW(WS_EX_TOPMOST, L"STATIC", L"", WS_POPUP | WS_BORDER | WS_VISIBLE | SS_CENTER,
+    HWND win = g_quiet ? NULL : CreateWindowExW(WS_EX_TOPMOST, L"STATIC", L"", WS_POPUP | WS_BORDER | WS_VISIBLE | SS_CENTER,
                                (wa.left + wa.right - w) / 2, (wa.top + wa.bottom - h) / 2, w, h, NULL, NULL, inst, NULL);
     g_text = win;
     if (win) SendMessageW(win, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
@@ -189,26 +204,90 @@ static int run_extract2(HINSTANCE inst, const wchar_t *src, const wchar_t *datad
     return ok;
 }
 
-int win32_setup(HINSTANCE inst, const wchar_t *exedir, wchar_t *home, int homelen)
+/* a path from the command line -> the extractor's source (like pick_source): a disc image or a folder as it is, a
+ * file on the disc -> its folder; relative paths are made absolute */
+static void source_of(const char *path, wchar_t *src, int n)
+{
+    wchar_t *w = wide16(path);
+    src[0] = 0;
+    if (!w) return;
+    if (!GetFullPathNameW(w, (DWORD)n, src, NULL)) wcsncpy(src, w, (size_t)n);
+    free(w);
+    DWORD a = GetFileAttributesW(src);
+    size_t len = wcslen(src);
+    if (a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY) && !(len > 4 && !_wcsicmp(src + len - 4, L".iso"))) {
+        wchar_t *slash = wcsrchr(src, L'\\');
+        if (slash) *slash = 0;
+    }
+}
+
+static void say(int quiet, const wchar_t *msg)                /* an error: stderr for an action flag, else a box */
+{
+    if (!quiet) { MessageBoxW(NULL, msg, L"MindMaze", MB_ICONERROR); return; }
+    char *u = utf8(msg);
+    fprintf(stderr, "MindMaze: %s\n", u ? u : "error");
+    free(u);
+}
+
+int win32_setup(HINSTANCE inst, const wchar_t *exedir, const char *home_arg, const char *disc_arg, int quiet,
+                wchar_t *home, int homelen)
 {
     wchar_t local[MAX_PATH * 2] = L"", tmp[MAX_PATH * 2];
     DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", tmp, MAX_PATH);
     if (n && n < MAX_PATH) swprintf(local, MAX_PATH * 2, L"%ls\\MindMaze\\", tmp);
 
-    if (exists(exedir, L"data\\tables.json")) { wcsncpy(home, exedir, (size_t)homelen); return 1; }
-    if (*local && exists(local, L"data\\tables.json")) { wcsncpy(home, local, (size_t)homelen); return 1; }
-
+    if (home_arg) {                                               /* --home <dir> */
+        wchar_t *w = wide16(home_arg);
+        if (!w || !GetFullPathNameW(w, (DWORD)homelen - 1, home, NULL)) { free(w); say(quiet, L"The --home folder is not valid."); return 0; }
+        free(w);
+        size_t len = wcslen(home);
+        if (len && home[len - 1] != L'\\' && home[len - 1] != L'/') wcscat(home, L"\\");
+        SHCreateDirectoryExW(NULL, home, NULL);                   /* (with its parents) */
+        if (!writable(home)) {
+            wchar_t m[MAX_PATH * 2 + 80];
+            swprintf(m, MAX_PATH * 2 + 80, L"MindMaze cannot write to the folder %ls.", home);
+            say(quiet, m);
+            return 0;
+        }
+    } else if (exists(exedir, L"data\\tables.json")) wcsncpy(home, exedir, (size_t)homelen);
+    else if (*local && exists(local, L"data\\tables.json")) wcsncpy(home, local, (size_t)homelen);
     /* first start: where to put the data */
-    if (writable(exedir)) wcsncpy(home, exedir, (size_t)homelen);
+    else if (writable(exedir)) wcsncpy(home, exedir, (size_t)homelen);
     else if (*local) { CreateDirectoryW(local, NULL); wcsncpy(home, local, (size_t)homelen); }
-    else { MessageBoxW(NULL, L"MindMaze cannot find a folder to write its data to.", L"MindMaze", MB_ICONERROR); return 0; }
+    else { say(quiet, L"MindMaze cannot find a folder to write its data to."); return 0; }
+    if (exists(home, L"data\\tables.json")) return 1;
     wchar_t datadir[MAX_PATH * 2];
     swprintf(datadir, MAX_PATH * 2, L"%lsdata\\", home);
 
     wchar_t src[MAX_PATH * 2] = L"";
-    int ask_disc = find_disc(src);
-    for (;;) {
-        if (ask_disc) {
+    char err[1024];
+    if (disc_arg) {                                               /* --disc <path>: no questions */
+        source_of(disc_arg, src, MAX_PATH * 2);
+        g_quiet = quiet;
+        if (quiet) {
+            char *u = utf8(src);
+            fprintf(stderr, "MindMaze: preparing the data folder from %s\n", u ? u : "");
+            free(u);
+        }
+        int ok = run_extract(inst, src, datadir, err, sizeof err);
+        g_quiet = 0;
+        if (ok) return 1;
+        if (quiet) { fprintf(stderr, "MindMaze: %s\n", err[0] ? err : "the extraction failed"); return 0; }
+        wchar_t *w = wide16(err), msg[1400];
+        swprintf(msg, 1400, L"%ls\n\nChoose another disc, image or folder?", w ? w : L"The extraction failed.");
+        free(w);
+        if (MessageBoxW(NULL, msg, L"MindMaze", MB_OKCANCEL | MB_ICONWARNING) != IDOK) return 0;
+    } else if (quiet) {
+        char *u = utf8(home);
+        fprintf(stderr, "MindMaze: no data folder in %s yet: give the Encarta disc with --disc <path>\n", u ? u : "");
+        free(u);
+        return 0;
+    }
+    int ask_disc = disc_arg ? 0 : find_disc(src);
+    if (disc_arg && !pick_source(src, MAX_PATH * 2)) return 0;
+    for (int first = 1;; first = 0) {
+        if (disc_arg && first) {                                  /* the given disc failed: chosen just above */
+        } else if (ask_disc) {
             wchar_t msg[600];
             swprintf(msg, 600, L"MindMaze uses the pictures, sounds and questions from your own Microsoft Encarta "
                                L"disc. They are copied once into:\n%ls\n\nFound an Encarta disc in %ls. Use it?\n\n"
@@ -226,7 +305,6 @@ int win32_setup(HINSTANCE inst, const wchar_t *exedir, wchar_t *home, int homele
             if (MessageBoxW(NULL, msg, L"MindMaze - first start", MB_OKCANCEL | MB_ICONINFORMATION) != IDOK) return 0;
             if (!pick_source(src, MAX_PATH * 2)) return 0;
         }
-        char err[1024];
         if (run_extract(inst, src, datadir, err, sizeof err)) return 1;
         wchar_t *w = wide16(err), msg[1400];
         swprintf(msg, 1400, L"%ls\n\nTry another disc, image or folder?", w ? w : L"The extraction failed.");
@@ -250,4 +328,23 @@ int win32_add_disc(HINSTANCE inst, const wchar_t *datadir, char *id, char *name,
         if (r == IDNO && !pick_source(src, MAX_PATH * 2)) return -1;
     } else if (!pick_source(src, MAX_PATH * 2)) return -1;
     return run_extract2(inst, src, datadir, 1, id, name, count, err, errlen);
+}
+
+/* --add-disc <path> (no window): the disc's questions -> data\editions\<id>\, then registered as a source */
+int win32_add_disc_quiet(HINSTANCE inst, const wchar_t *datadir, const char *path)
+{
+    wchar_t src[MAX_PATH * 2];
+    char id[16] = "", name[64] = "", err[1024] = "", msg[1024];
+    int count = 0;
+    source_of(path, src, MAX_PATH * 2);
+    char *u = utf8(src);
+    fprintf(stderr, "MindMaze: reading the questions from %s\n", u ? u : "");
+    free(u);
+    g_quiet = 1;
+    int ok = run_extract2(inst, src, datadir, 1, id, name, &count, err, sizeof err);
+    g_quiet = 0;
+    if (!ok) fprintf(stderr, "MindMaze: %s\n", err[0] ? err : "the disc could not be read");
+    else if (!(ok = cli_add_edition(id, name, count, msg, sizeof msg))) fprintf(stderr, "MindMaze: %s\n", msg);
+    else printf("%s\n", msg);
+    return ok;
 }

@@ -2,9 +2,12 @@
  * the built-in extractor (src/extract), like win32_setup.c; plus Settings > "Add questions from a disc".
  *
  * Where the data lives ("home" = the folder holding data/, mindmaze.ini and the player's files):
- *   1. next to the program, if data/tables.json is there (portable use; on macOS that is the app's Resources);
- *   2. otherwise the user's application data folder: Linux $XDG_DATA_HOME/MindMaze (~/.local/share/MindMaze),
- *      macOS ~/Library/Application Support/MindMaze (SDL_GetPrefPath).
+ *   0. --home <dir> on the command line, if given;
+ *   1. next to the program, if data/tables.json is there (on macOS that is the app's Resources);
+ *   2. the user's application data folder, if an earlier start put the data there: Linux $XDG_DATA_HOME/MindMaze
+ *      (~/.local/share/MindMaze), macOS ~/Library/Application Support/MindMaze (SDL_GetPrefPath);
+ *   3. Linux: next to the program if that folder is writable (portable by default, CHANGE 2026-11-19);
+ *   4. otherwise the application data folder (macOS always: the signed app bundle must stay unchanged).
  * The disc: a path given on the command line (disc image, folder, or a file on the disc), a mounted Encarta disc
  * (Linux /media, /run/media, /mnt; macOS /Volumes), or one chosen in the file dialog. */
 #include <stdio.h>
@@ -13,6 +16,7 @@
 #include "sdl.h"
 #include "mm.h"
 #include "mx.h"
+#include "cli.h"
 
 /* ---- MXIO on SDL file streams (64-bit offsets: a disc image is 3 GB) ---- */
 static char g_out[1024];
@@ -46,7 +50,17 @@ static int io_write(MXIO *io, const char *rel, const void *d, size_t n)
     snprintf(p, sizeof p, "%s%s", g_out, rel);
     return sdl_write_file(p, d, n);
 }
-static void io_progress(MXIO *io, int pct, const char *step) { (void)io; sdl_progress(pct, step); }
+static int g_headless;                                    /* an action flag runs: progress to stderr, no window */
+static void io_progress(MXIO *io, int pct, const char *step)
+{
+    (void)io;
+    static int last = -100;
+    if (!g_headless) { sdl_progress(pct, step); return; }
+    if (pct >= last && pct < last + 10 && pct != 100) return;    /* every 10 % (a new step may start at 0 again) */
+    last = pct;
+    if (pct >= 0) fprintf(stderr, "  %3d%% %s\n", pct, step ? step : "");
+    else if (step && *step) fprintf(stderr, "  %s\n", step);
+}
 
 /* the extractor on a background thread (sdl_run_job): the whole data folder, or one more disc's questions */
 typedef struct { char src[1100]; int add; char id[16], name[64]; int count; char err[1024]; } Extract;
@@ -135,22 +149,70 @@ static const char NO_DIALOG[] = "No file dialog is available on this system (it 
                                 "Start MindMaze with the disc image or the disc's folder as its argument instead, e.g.\n"
                                 "  ./MindMaze ~/Downloads/Encarta.iso";
 
-int sdl_setup(const char *source)
+/* a folder MindMaze may write to (a test file is made and removed) */
+static int writable(const char *dir)
+{
+    char p[1200];
+    sdl_join(p, sizeof p, dir, ".mindmaze-write-test");
+    FILE *f = fopen(p, "wb");
+    if (!f) return 0;
+    fclose(f);
+    remove(p);
+    return 1;
+}
+
+static int has_data(const char *home)
+{
+    char p[1200];
+    sdl_join(p, sizeof p, home, "data/tables.json");
+    return sdl_exists(p);
+}
+
+/* the home folder (see the top of this file); --home wins. 0 = none found (message shown / printed) */
+static int pick_home(const char *home, int headless)
+{
+    if (home) {                                                    /* --home <dir> */
+        SDL_CreateDirectory(home);                                 /* (with its parents) */
+        if (!sdl_exists(home)) {
+            char m[1200];
+            snprintf(m, sizeof m, "MindMaze cannot create the folder %s.", home);
+            if (headless) fprintf(stderr, "MindMaze: %s\n", m); else sdl_ask(1, "MindMaze", m, "OK", NULL, NULL);
+            return 0;
+        }
+        sdl_join(sdl_home, sizeof sdl_home, home, "");
+        return 1;
+    }
+    if (has_data(sdl_res)) { SDL_strlcpy(sdl_home, sdl_res, sizeof sdl_home); return 1; }
+#ifndef __APPLE__
+    /* portable by default (CHANGE 2026-11-19, like Windows): everything stays in the folder the tarball was unpacked
+     * to, unless an older start already put the data in the application data folder (1.0.0/1.0.1 did) or this folder
+     * is read-only. SDL_GetPrefPath creates its folder, so it is only asked when that folder is used. */
+    {
+        const char *xdg = getenv("XDG_DATA_HOME"), *h = getenv("HOME");
+        char old[1100] = "";
+        if (xdg && *xdg) snprintf(old, sizeof old, "%s/MindMaze/", xdg);
+        else if (h && *h) snprintf(old, sizeof old, "%s/.local/share/MindMaze/", h);
+        if (!(*old && has_data(old)) && writable(sdl_res)) { SDL_strlcpy(sdl_home, sdl_res, sizeof sdl_home); return 1; }
+    }
+#endif
+    char *pref = SDL_GetPrefPath(NULL, "MindMaze");                 /* (creates the folder) */
+    int got = pref != NULL;
+    if (got) sdl_join(sdl_home, sizeof sdl_home, pref, "");
+    SDL_free(pref);
+    if (!got) {
+        if (headless) fprintf(stderr, "MindMaze: cannot find a folder to write its data to\n");
+        else sdl_ask(1, "MindMaze", "MindMaze cannot find a folder to write its data to.", "OK", NULL, NULL);
+        return 0;
+    }
+    return 1;
+}
+
+int sdl_setup(const char *source, const char *home, int headless)
 {
     const char *base = SDL_GetBasePath();
     char p[1200];
     sdl_join(sdl_res, sizeof sdl_res, base ? base : ".", "");
-    sdl_join(p, sizeof p, sdl_res, "data/tables.json");
-    if (sdl_exists(p)) SDL_strlcpy(sdl_home, sdl_res, sizeof sdl_home);   /* portable */
-    else {
-        char *pref = SDL_GetPrefPath(NULL, "MindMaze");                     /* creates the folder */
-        if (!pref) {
-            sdl_ask(1, "MindMaze", "MindMaze cannot find a folder to write its data to.", "OK", NULL, NULL);
-            return 0;
-        }
-        sdl_join(sdl_home, sizeof sdl_home, pref, "");
-        SDL_free(pref);
-    }
+    if (!pick_home(home, headless)) return 0;
     snprintf(sdl_data, sizeof sdl_data, "%sdata/", sdl_home);
     snprintf(p, sizeof p, "%stables.json", sdl_data);
     if (sdl_exists(p)) return 1;
@@ -158,6 +220,22 @@ int sdl_setup(const char *source)
     /* first start */
     Extract *x = calloc(1, sizeof *x);
     if (!x) return 0;
+    if (headless) {                                                /* an action flag: no window, no questions */
+        int ok = 0;
+        if (!source) fprintf(stderr, "MindMaze: no data folder in %s yet: give the Encarta disc with --disc <path>\n", sdl_home);
+        else {
+            source_of(source, x->src);
+            SDL_strlcpy(g_out, sdl_data, sizeof g_out);
+            SDL_CreateDirectory(sdl_data);
+            g_headless = 1;
+            fprintf(stderr, "MindMaze: preparing %s from %s\n", sdl_data, x->src);
+            ok = extract_job(x);
+            g_headless = 0;
+            if (!ok) fprintf(stderr, "MindMaze: %s\n", x->err[0] ? x->err : "the extraction failed");
+        }
+        free(x);
+        return ok;
+    }
     char msg[2600];
     int ask = 0, ok = 0;
     if (source) source_of(source, x->src);                           /* given on the command line: no questions */
@@ -215,4 +293,24 @@ void plat_add_disc(void)
     mm_disc_added(ok, x->id, x->name, x->count, ok ? NULL : (x->err[0] ? x->err : "The disc could not be read."));
     free(x);
     plat_invalidate();
+}
+
+/* --add-disc <path> (no window): the disc's questions -> data/editions/<id>/, then registered as a source */
+int sdl_add_disc_headless(const char *path)
+{
+    Extract *x = calloc(1, sizeof *x);
+    if (!x) return 0;
+    source_of(path, x->src);
+    SDL_strlcpy(g_out, sdl_data, sizeof g_out);
+    x->add = 1;
+    g_headless = 1;
+    fprintf(stderr, "MindMaze: reading the questions from %s\n", x->src);
+    char msg[1024];
+    int ok = extract_job(x);
+    g_headless = 0;
+    if (!ok) fprintf(stderr, "MindMaze: %s\n", x->err[0] ? x->err : "the disc could not be read");
+    else if (!(ok = cli_add_edition(x->id, x->name, x->count, msg, sizeof msg))) fprintf(stderr, "MindMaze: %s\n", msg);
+    else printf("%s\n", msg);
+    free(x);
+    return ok;
 }

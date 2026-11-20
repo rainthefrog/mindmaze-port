@@ -86,8 +86,9 @@ Keys: F2 HD art, F3 widescreen (when that art is present, see below), F11 full s
 2. Start `MindMaze/MindMaze`. On the first start it looks for a mounted Encarta disc (`/media`, `/run/media`, `/mnt`);
    if there is none it asks for the disc image (`.iso`), or for `ENCARTA.EXE` / `MINDMAZE.DB` on the disc. You can
    also give the image on the command line: `./MindMaze ~/Downloads/Encarta.iso`.
-3. The data goes to `~/.local/share/MindMaze` (`$XDG_DATA_HOME/MindMaze`), or to a `data` folder next to the program
-   if you put one there (portable use, e.g. a copy from the Windows version).
+3. Everything stays in the unpacked `MindMaze` folder (`data/`, `mindmaze.ini`, the players): delete the folder and
+   the game is gone. Only if that folder is read-only does the data go to `~/.local/share/MindMaze`
+   (`$XDG_DATA_HOME/MindMaze`); data that 1.0.0 / 1.0.1 put there is still found and used.
 
 The file dialog needs xdg-desktop-portal or zenity (every desktop has one; in Steam Deck's game mode start it once
 from the desktop, or pass the image as above). Steam Deck: add `MindMaze` as a non-Steam game.
@@ -110,7 +111,31 @@ Proton. A mounted disc is found through Wine's `Z:` drive; otherwise choose the 
 Keys on Linux and macOS: F2 HD art, F3 widescreen, F11 or Alt+Enter full screen; Ctrl+N (macOS: Cmd+N) new game,
 Ctrl+M music on/off, Ctrl+E sound effects on/off, Ctrl+Q quit. The music plays through the bundled SoundFont
 GeneralUser GS; more `.sf2` SoundFonts put in a `soundfonts` folder next to the `data` folder (e.g.
-`~/.local/share/MindMaze/soundfonts`) appear in Settings > "Music instruments".
+`MindMaze/soundfonts`) appear in Settings > "Music instruments".
+
+## Command line (Windows, Linux, macOS)
+
+Everything works from the game itself; the flags are for launchers and scripts. `MindMaze --help` lists them:
+
+| Flag | |
+| --- | --- |
+| `-f`, `--fullscreen` / `--windowed` | start in full screen / in a window |
+| `--hd`, `--no-hd`, `--wide`, `--no-wide` | HD pictures, widescreen view on / off (once made) |
+| `--music <0-100>`, `--sound <0-100>` | volumes (0 = off) |
+| `--no-title` | skip the title screen |
+| `--set <key>=<value>` | any `mindmaze.ini` setting |
+| `--home <dir>` | keep everything (`data/`, `mindmaze.ini`, players) in `<dir>` |
+| `--disc <path>` or just `<path>` | first start: the Encarta disc image, folder or a file on it; no questions asked |
+| `--add-disc <path>` | add the questions of another Encarta disc |
+| `--export <file.zip>` | write the data file for the phone app |
+| `--prepare-art`, `--install-art` | write the HD / widescreen kit again; install finished pictures |
+| `--help`, `--version` | |
+
+Game flags apply to that run only; the saved settings stay as they are (a change made in the game during the run is
+saved as usual). The actions (`--add-disc`, `--export`, `--prepare-art`, `--install-art`) run without a window and
+exit: code 0 = done, 1 = failed (reason on stderr), 2 = wrong usage. With `--disc` they also build the data folder
+first, so `MindMaze --home ~/Games/mm --disc Encarta.iso --prepare-art` sets everything up without a window.
+`--opt=value` works as well as `--opt value`.
 
 For developers there is also a Python version of the extractor (`tools/extract/extract.py`, needs 7-Zip); both
 write the same data folder.

@@ -12,6 +12,7 @@
 #include "mm.h"
 #include "music.h"
 #include "zip_write.h"
+#include "cli.h"
 #include "../../third_party/stb_image.h"
 
 char sdl_home[1024], sdl_data[1024], sdl_res[1024];
@@ -181,6 +182,7 @@ static void settings_load(void)
 
 int plat_get_setting(const char *key, char *buf, int n)
 {
+    if (cli_setting(key, buf, n)) return 1;                   /* a command-line flag, this run only (../common/cli.h) */
     for (int i = 0; i < g_nset; i++)
         if (!SDL_strcasecmp(g_set[i].key, key)) { SDL_strlcpy(buf, g_set[i].value, (size_t)n); return 1; }
     return 0;
@@ -193,6 +195,7 @@ void plat_set_setting(const char *key, const char *value)
         SDL_strlcpy(v, value, sizeof v);
         for (char *p = v; *p; p++) if (*p == '\n' || *p == '\r') *p = ' ';
     }
+    cli_setting_forget(key);                                 /* changed in the game: the saved value counts from now on */
     settings_put(key, value ? v : NULL);
     settings_save();
 }
@@ -397,8 +400,7 @@ void plat_export_data(void)
 {
     static const SDL_DialogFileFilter ZIP[] = {{"MindMaze data file (*.zip)", "zip"}};
     char def[1200];
-    const char *home = SDL_GetUserFolder(SDL_FOLDER_HOME);
-    sdl_join(def, sizeof def, home ? home : "", "MindMaze-data.zip");
+    sdl_join(def, sizeof def, sdl_home, "MindMaze-data.zip");   /* the game's own folder (portable) */
     char *zip = sdl_pick_file(1, ZIP, 1, def);
     if (!zip) {
         if (sdl_pick_failed)
@@ -423,4 +425,14 @@ void plat_export_data(void)
     sdl_ask(!ok, "MindMaze", msg, "OK", NULL, NULL);
     free(zip);
     plat_invalidate();
+}
+
+/* --export <file.zip> (no window) */
+int sdl_export_headless(const char *zip)
+{
+    ExportJob x = {zip, ""};
+    int ok = export_job(&x);
+    if (ok) printf("Saved %s (%s). It holds pictures from your Encarta disc: keep it for yourself.\n", zip, x.msg);
+    else fprintf(stderr, "MindMaze: the data could not be exported: %s\n", x.msg);
+    return ok;
 }
