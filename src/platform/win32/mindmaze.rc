@@ -11,8 +11,8 @@ FONT_SERIF_B RCDATA "../../../fonts/LiberationSerif-Bold.ttf"
 FONT_PAGELLA_I RCDATA "../../../fonts/texgyrepagella-italic.otf"
 
 1 VERSIONINFO
-FILEVERSION 1,0,2,0
-PRODUCTVERSION 1,0,2,0
+FILEVERSION 1,0,3,0
+PRODUCTVERSION 1,0,3,0
 BEGIN
   BLOCK "StringFileInfo"
   BEGIN
@@ -20,8 +20,8 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "MindMaze (mindmaze-port, open-source re-implementation)"
       VALUE "ProductName", "MindMaze"
-      VALUE "FileVersion", "1.0.2"
-      VALUE "ProductVersion", "1.0.2"
+      VALUE "FileVersion", "1.0.3"
+      VALUE "ProductVersion", "1.0.3"
     END
   END
   BLOCK "VarFileInfo"
