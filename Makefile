@@ -3,15 +3,16 @@
 #   make win32                 build/win32/MindMaze.exe (mingw-w64 cross build; the whole Windows download)
 #   make test-data DATA=data   the core tests on a folder extracted from an Encarta 2006 disc
 #   make test-extract ISO=...  the built-in C extractor against tools/extract/extract.py on a real disc
+#   make test-qtmusic MAC96=... WINMIDI=...  the Encarta 96 Mac QuickTime music converted and compared with Windows MIDIs
 #   make linux                 build/linux/MindMaze-linux-x86_64.tar.gz (SDL3; in the image of docker/linux.Dockerfile)
 #   make macos                 build/macos/MindMaze-macos.zip (SDL3; on a Mac with Xcode's tools, see release.yml)
 #   make web                   build/web/ (WebAssembly engine of the Android app; needs emcc: emscripten/emsdk image)
 #   make android               build/android/MindMaze.apk from build/web (mindmaze-port-android image; run make web first)
 CORE = src/core/mm_util.c src/core/mm_questions.c src/core/mm_rich.c src/core/mm_sources.c src/core/mm_settings.c \
-       src/core/mm_tables.c src/art/mm_art.c src/art/mm_art_img.c
+       src/core/mm_tables.c src/core/mm_view.c src/core/mm_stats.c src/art/mm_art.c src/art/mm_art_img.c
 EXTRACT = src/extract/mx_extract.c src/extract/mx_lzx.c src/extract/mx_util.c src/extract/mx_old.c src/extract/mx_edition.c \
           src/extract/mx_oldext.c src/extract/mx_tables.c src/extract/mx_tables_pe.c src/extract/mx_tables_ne.c \
-          src/extract/mx_tables_mac.c build/embedded.c
+          src/extract/mx_tables_mac.c src/extract/mx_qtmusic.c build/embedded.c
 WIN32 = src/platform/win32/win32_main.c src/platform/win32/win32_setup.c src/platform/win32/win32_export.c \
         src/platform/common/zip_write.c src/platform/common/cli.c \
         src/platform/win32/win32_update.c src/platform/common/update.c
@@ -21,6 +22,10 @@ HEADERS = src/core/mm.h src/core/mm_tables.h src/extract/mx.h src/extract/mx_tab
 REPO_URL ?= https://github.com/OWNER/mindmaze-port
 # the version shown by --version (the release workflow sets it from the tag)
 APP_VERSION_NAME ?= 1.0
+# the Android versionCode from the version (1.0.4 -> 1000400, a local test build 1.0.3.8 -> 1000308): always rising, so a
+# release installs over test builds and the updater never offers a "downgrade" Android refuses (2026-11-21)
+APP_VERSION_CODE ?= $(shell echo $(APP_VERSION_NAME) | awk -F. '{ print $$1*1000000 + $$2*10000 + $$3*100 + $$4 }')
+export APP_VERSION_NAME APP_VERSION_CODE
 CFLAGS = -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wno-format-truncation -ffp-contract=off -DMM_REPO_URL='"$(REPO_URL)"' -DMM_VERSION='"$(APP_VERSION_NAME)"'
 MINGW = i686-w64-mingw32
 DATA ?= data
@@ -31,9 +36,9 @@ build/fixtures/tables.json: tests/make_fixtures.py tools/extract/mmdb.py
 	mkdir -p build/fixtures
 	python3 -I tests/make_fixtures.py build/fixtures
 
-build/test_core: tests/test_core.c $(CORE) src/core/mm_game.c $(HEADERS)
+build/test_core: tests/test_core.c $(CORE) src/core/mm_game.c $(HEADERS) src/platform/common/text.c
 	mkdir -p build
-	$(CC) $(CFLAGS) -O1 -g -fsanitize=address,undefined -Isrc/core -Isrc/art tests/test_core.c $(CORE) -lm -o $@
+	$(CC) $(CFLAGS) -O1 -g -fsanitize=address,undefined -Isrc/core -Isrc/art -Isrc/platform/common tests/test_core.c $(CORE) src/platform/common/text.c -lm -o $@
 
 build/test_update: tests/test_update.c src/platform/common/update.c src/platform/common/update.h src/extract/mx_util.c
 	mkdir -p build
@@ -42,15 +47,29 @@ build/test_update: tests/test_update.c src/platform/common/update.c src/platform
 build/test_mx: tests/test_mx.c $(EXTRACT) $(HEADERS)
 	$(CC) $(CFLAGS) -O1 -g -fsanitize=address,undefined -Isrc/extract tests/test_mx.c $(EXTRACT) -o $@
 
-test: build/test_core build/test_mx build/fixtures/tables.json build/test_update
+# CHANGE 2026-11-21: QuickTime music -> SMF (Encarta 96 Mac). make test runs the synthetic part; the disc part:
+#   make test-qtmusic MAC96=../Encarta/MSEnc96.iso WINMIDI=<a Windows disc's MM/MIDI folder>
+build/test_qtmusic: tests/test_qtmusic.c $(EXTRACT) $(HEADERS)
+	$(CC) $(CFLAGS) -O1 -g -fsanitize=address,undefined -Isrc/extract tests/test_qtmusic.c $(EXTRACT) -lm -o $@
+
+build/test_stats: tests/test_stats.c src/core/mm_stats.c src/core/mm_util.c $(HEADERS)
+	mkdir -p build
+	$(CC) $(CFLAGS) -O1 -g -fsanitize=address,undefined -Isrc/core tests/test_stats.c src/core/mm_stats.c src/core/mm_util.c -lm -o $@
+
+test: build/test_core build/test_mx build/fixtures/tables.json build/test_update build/test_stats build/test_qtmusic
 	build/test_core build/fixtures
+	build/test_stats
 	build/test_mx
+	build/test_qtmusic
 	sh tests/make_update_fixtures.sh build/update-fixtures
 	build/test_update build/update-fixtures
 	python3 -I tests/test_extract.py
 
 test-data: build/test_core
 	build/test_core $(DATA) --original
+
+test-qtmusic: build/test_qtmusic
+	build/test_qtmusic "$(MAC96)" "$(WINMIDI)"
 
 build/embedded.c: tools/embed.py $(wildcard packs/*.json packs/*.md codex/*.txt codex/wide/*.txt docs/HD-ART.md)
 	mkdir -p build
@@ -83,7 +102,7 @@ build/win32/MindMaze.exe: $(CORE) $(EXTRACT) $(WIN32) $(HEADERS) src/core/mm_gam
 	$(MINGW)-strip $@
 
 WEB = src/platform/web/web_main.c src/platform/common/text.c src/platform/common/music.c
-WEB_EXPORTS = _main,_malloc,_free,_web_start,_web_resize,_web_mouse,_web_key,_web_char,_web_cmd,_web_music_ended,_web_http_done,_web_scale,_web_view_ext,_web_music_render,_web_music_rate,_web_music_state,_web_disc_reading,_web_disc_added,_web_art_installed
+WEB_EXPORTS = _main,_malloc,_free,_web_save,_web_activate,_web_text_input,_web_text_value,_web_text_label,_web_start,_web_resize,_web_mouse,_web_key,_web_char,_web_cmd,_web_music_ended,_web_http_done,_web_scale,_web_view_ext,_web_music_render,_web_music_rate,_web_music_state,_web_disc_reading,_web_disc_added,_web_art_installed
 web: build/web/mindmaze.js
 build/web/mindmaze.js: $(CORE) src/core/mm_game.c $(WEB) $(HEADERS) src/platform/common/text.h src/platform/common/music.h \
                        src/platform/web/index.html src/platform/web/shell.js src/platform/web/extract-worker.js \
@@ -176,4 +195,4 @@ build/macos/MindMaze-macos.zip: $(SDL_SRC) $(HEADERS) $(SDL_HEADERS) build/sound
 clean:
 	rm -rf build
 
-.PHONY: all test test-data test-extract win32 web android linux macos clean art-text
+.PHONY: all test test-data test-qtmusic test-extract win32 web android linux macos clean art-text

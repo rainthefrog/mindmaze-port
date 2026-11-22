@@ -8,7 +8,7 @@ import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import com.getcapacitor.BridgeActivity;
 
-/* MindMaze: the WebAssembly game (www/) in Capacitor's WebView, landscape, full screen (system bars hidden; a
+/* MindMaze: the WebAssembly game (www/) in Capacitor's WebView, landscape (either way round; portrait is not supported, 2026-11-21), full screen (system bars hidden; a
  * swipe from the edge shows them for a moment). */
 public class MainActivity extends BridgeActivity {
     @Override
@@ -25,7 +25,23 @@ public class MainActivity extends BridgeActivity {
         if (hasFocus) immersive();
     }
 
+    @Override
+    public void onResume() {
+        super.onResume();
+        immersive();                                      // (back from another app, the file chooser or the installer)
+    }
+
     private void immersive() {
+        // (user 2026-11-21: the status bar must be fully hidden) - full screen flag, and drawn over a camera cutout too:
+        // otherwise Android keeps the game out of the cutout's edge and a black strip stays where the status bar was
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            WindowManager.LayoutParams a = getWindow().getAttributes();
+            a.layoutInDisplayCutoutMode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                ? WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(a);
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             getWindow().setDecorFitsSystemWindows(false);
             WindowInsetsController c = getWindow().getInsetsController();

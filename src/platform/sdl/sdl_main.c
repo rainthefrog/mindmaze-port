@@ -32,29 +32,32 @@ static SDL_Cursor *g_cursor[2];
 static int g_hand;
 #define FILL_TOLERANCE 0.03
 
-static int view_w(void) { return MM_W + 2 * mm_view_ext(); }   /* logical width: 636, or 764 in widescreen */
+/* the view's logical size (mm.h): classic 636 x 437 (764 in widescreen), touch layout 936 x 437 or 636 x 1311 */
+static int view_w(void) { return mm_view_w(); }
+static int view_h(void) { return mm_view_h(); }
+static int g_user_resize;                      /* mm_set_screen from a resize by the player: keep the window's size */
 
 /* ---- display ---- */
 static void layout(void)
 {
-    int cw = 1, ch = 1, vw = view_w();
+    int cw = 1, ch = 1, vw = view_w(), vh = view_h();
     SDL_GetWindowSizeInPixels(sdl_window, &cw, &ch);
     if (cw < 1) cw = 1;
     if (ch < 1) ch = 1;
-    double f = (double)cw / vw < (double)ch / MM_H ? (double)cw / vw : (double)ch / MM_H;
+    double f = (double)cw / vw < (double)ch / vh ? (double)cw / vw : (double)ch / vh;
     int s = (int)f;
     if (f - s > 0.001) s++;                                /* next whole scale up, scaled down when shown */
     if (s < 1) s = 1;
     if (s > 8) s = 8;
-    int dw = (int)(vw * f + 0.5), dh = (int)(MM_H * f + 0.5);
-    double aspect = ((double)cw / ch) / ((double)vw / MM_H);
+    int dw = (int)(vw * f + 0.5), dh = (int)(vh * f + 0.5);
+    double aspect = ((double)cw / ch) / ((double)vw / vh);
     if (aspect > 1 - FILL_TOLERANCE && aspect < 1 + FILL_TOLERANCE) { dw = cw; dh = ch; }
     g_dst = (SDL_FRect){(float)((cw - dw) / 2), (float)((ch - dh) / 2), (float)dw, (float)dh};
-    if (!g_canvas.px || g_canvas.scale != s || g_canvas.w != vw * s) {
+    if (!g_canvas.px || g_canvas.scale != s || g_canvas.w != vw * s || g_canvas.h != vh * s) {
         free(g_canvas.px);
         g_canvas.scale = s;
         g_canvas.w = g_canvas.stride = vw * s;
-        g_canvas.h = MM_H * s;
+        g_canvas.h = vh * s;
         g_canvas.px = calloc((size_t)g_canvas.w * g_canvas.h, 4);
         if (g_tex) SDL_DestroyTexture(g_tex);
         g_tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, g_canvas.w, g_canvas.h);
@@ -62,7 +65,7 @@ static void layout(void)
     }
     /* exact size: sharp pixels; scaled down: smooth */
     SDL_SetTextureScaleMode(g_tex, dw == g_canvas.w && dh == g_canvas.h ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR);
-    g_canvas.ox = mm_view_ext();
+    g_canvas.ox = mm_view_ox();
     g_dirty = 1;
 }
 
@@ -78,7 +81,8 @@ static void present(void)
 static int is_full(void) { return (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_FULLSCREEN) != 0; }
 
 /* Size the window to the biggest whole scale that fits the screen's usable area (keep_scale: stay at the current
- * scale when it still fits; used when widescreen is toggled). Full screen / maximized windows keep their size. */
+ * scale when it still fits; used when the view changes: widescreen, layout). Full screen / maximized windows keep their
+ * size. A view taller than the screen at scale 1 (the portrait touch layout) gets the biggest window that fits. */
 static void size_window(int keep_scale, int center)
 {
     if (is_full() || (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_MAXIMIZED)) { layout(); return; }
@@ -88,16 +92,36 @@ static void size_window(int keep_scale, int center)
     SDL_GetDisplayUsableBounds(d, &ub);
     float dens = SDL_GetWindowPixelDensity(sdl_window);  /* window sizes are in points; the canvas is in pixels */
     if (dens <= 0) dens = 1;
-    int vw = view_w(), s = 1;
+    int vw = view_w(), vh = view_h(), s = 1;
     for (int t = 2; t <= 8; t++)                          /* room for the title bar */
-        if (vw * t / dens <= ub.w && MM_H * t / dens <= ub.h - 48) s = t;
+        if (vw * t / dens <= ub.w && vh * t / dens <= ub.h - 48) s = t;
     if (keep_scale && g_canvas.scale && g_canvas.scale < s) s = g_canvas.scale;
-    SDL_SetWindowSize(sdl_window, (int)(vw * s / dens), (int)(MM_H * s / dens));
+    double k = s / dens;
+    if (s == 1 && (vw * k > ub.w || vh * k > ub.h - 48)) {   /* too big even at scale 1: shrink, same shape */
+        double kw = ub.w / (double)vw, kh = (ub.h - 48) / (double)vh;
+        k = kw < kh ? kw : kh;
+    }
+    SDL_SetWindowSize(sdl_window, (int)(vw * k), (int)(vh * k));
     if (center) SDL_SetWindowPosition(sdl_window, SDL_WINDOWPOS_CENTERED_DISPLAY(d), SDL_WINDOWPOS_CENTERED_DISPLAY(d));
     layout();
 }
 
-void plat_view_changed(void) { size_window(1, 0); }       /* widescreen toggled (also from the settings screen) */
+/* widescreen toggled, the layout setting changed (also from the settings screen), or the window changed shape */
+void plat_view_changed(void)
+{
+    if (g_user_resize) layout();                          /* the player sized the window: draw the new view into it */
+    else size_window(1, 0);
+}
+
+/* the window's shape for the core's layout choice (portrait / landscape; touch 0: the player can force the touch layout) */
+static void screen_changed(void)
+{
+    int w = 0, h = 0;
+    SDL_GetWindowSizeInPixels(sdl_window, &w, &h);
+    g_user_resize = 1;
+    mm_set_screen(w, h, 0);
+    g_user_resize = 0;
+}
 void plat_invalidate(void) { g_dirty = 1; }
 void plat_quit(void) { g_running = 0; }
 void plat_set_cursor(int hand)
@@ -135,7 +159,7 @@ void sdl_status(const char *title, const char *step, int pct)
     step = g_st_step;
     int ox = c->ox, vw = c->w / c->scale;
     c->ox = 0;
-    mm_fill(c, 0, 0, vw, MM_H, 0x1C2430);
+    mm_fill(c, 0, 0, vw, c->h / c->scale, 0x1C2430);
     text_box(c, 20, 150, vw - 40, 40, title, FONT_LIST, 0xFFFFFF, TX_CENTER | TX_WRAP);
     if (step && *step) text_box(c, 20, 196, vw - 40, 32, step, FONT_TEXT, 0xC8D0DC, TX_CENTER | TX_WRAP);
     if (pct >= 0) {
@@ -270,7 +294,7 @@ static void mouse(float wx, float wy, int button, int action)
     if (dens <= 0) dens = 1;
     double px = wx * dens - g_dst.x, py = wy * dens - g_dst.y;
     int x = (int)floor(px * view_w() / (g_dst.w > 0 ? g_dst.w : 1)) - g_canvas.ox;
-    int y = (int)floor(py * MM_H / (g_dst.h > 0 ? g_dst.h : 1));
+    int y = (int)floor(py * view_h() / (g_dst.h > 0 ? g_dst.h : 1));
     mm_mouse(x, y, button, action, mods());
 }
 
@@ -321,7 +345,7 @@ static void key_down(const SDL_KeyboardEvent *e)
             return;
         }
         case SDLK_N: if (!e->repeat) mm_cmd(CMD_NEW_GAME); return;
-        case SDLK_Q: if (!e->repeat) mm_cmd(CMD_QUIT); return;
+        case SDLK_Q: if (!e->repeat) mm_cmd(CMD_EXIT); return;
         case SDLK_M: if (!e->repeat) mm_cmd(CMD_MUSIC); return;
         case SDLK_E: if (!e->repeat) mm_cmd(CMD_SOUND); return;
         }
@@ -334,7 +358,9 @@ static void handle(const SDL_Event *e)
 {
     switch (e->type) {
     case SDL_EVENT_QUIT: mm_shutdown(); g_running = 0; break;
-    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: layout(); break;
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:                 /* (mobile / the system ends the session) */
+    case SDL_EVENT_TERMINATING: if (g_game_on) mm_save_players(); break;
+    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: layout(); if (g_game_on) screen_changed(); break;
     case SDL_EVENT_WINDOW_EXPOSED: g_dirty = 1; break;
     case SDL_EVENT_WINDOW_FOCUS_GAINED: mm_activate(1); break;
     case SDL_EVENT_WINDOW_FOCUS_LOST: mm_activate(0); break;
@@ -458,7 +484,8 @@ int main(int argc, char **argv)
         SDL_Quit();
         return 1;
     }
-    if (mm_view_ext()) size_window(0, 1);                 /* the window was made before the setting was read */
+    screen_changed();                                     /* the window's shape (layout setting "touch": portrait / landscape) */
+    if (view_w() != MM_W || view_h() != MM_H) size_window(0, 1);   /* the window was made before the settings were read */
     if (cli.fullscreen == 1) { SDL_SetWindowFullscreen(sdl_window, true); SDL_SyncWindow(sdl_window); }   /* --fullscreen */
     layout();
     SDL_StartTextInput(sdl_window);
@@ -466,12 +493,16 @@ int main(int argc, char **argv)
     sdl_update_start();                                   /* a newer release? (sdl_update.c asks the player) */
     if (g_quit_pending) { mm_shutdown(); g_running = 0; }
 
+    /* the core's tick every 50 ms (catching up at most a little); while it animates (mm_animating) every 16 ms with a
+     * redraw each time, about 60 per second */
     Uint64 next = SDL_GetTicks();
     while (g_running) {
         Uint64 now = SDL_GetTicks();
-        if (now >= next) {                                /* the core's 50 ms tick (catching up at most a little) */
+        if (now >= next) {
             mm_tick();
-            next = now - next > 200 ? now + 50 : next + 50;
+            int anim = mm_animating(), dt = anim ? 16 : 50;
+            next = now - next > 200 ? now + dt : next + dt;
+            if (anim) g_dirty = 1;
         }
         sdl_audio_poll();
         if (g_dirty) {
@@ -480,6 +511,7 @@ int main(int argc, char **argv)
             present();
         }
         now = SDL_GetTicks();
+        if (next > now + 16 && mm_animating()) next = now + 16;   /* an animation started by input: fast ticks now */
         SDL_Event e;
         if (SDL_WaitEventTimeout(&e, next > now ? (Sint32)(next - now) : 0))
             do handle(&e); while (g_running && SDL_PollEvent(&e));

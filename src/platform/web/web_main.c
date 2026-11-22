@@ -18,6 +18,7 @@
 static MMCanvas g_c;
 static uint8_t *g_rgba;
 static int g_dev_w = 1280, g_dev_h = 720, g_dirty = 1, g_started;
+static int g_css_w = 1280, g_css_h = 720, g_touch;              /* the page's shape and input (mm_set_screen) */
 static double g_next_tick;
 
 /* ---- JS side (shell.js provides the objects these use) ---- */
@@ -202,21 +203,23 @@ void plat_quit(void) {}
 void plat_http_get(const char *url, int tag) { js_http_get(url, tag); }
 
 
-/* ---- canvas size: the biggest whole scale that fits the device pixels (at least 1, at most 4) ---- */
+/* ---- canvas size: the view (mm_view_w x mm_view_h logical: classic 636 / 764 x 437, touch 936 x 437 or 636 x 1311)
+ * at the biggest whole scale that fits the device pixels (at least 1, at most 4); shell.js letterboxes it ---- */
 static void layout(void)
 {
-    int vw = MM_W + 2 * mm_view_ext(), vh = MM_H;
+    int vw = mm_view_w(), vh = mm_view_h();
     int s = g_dev_w / vw < g_dev_h / vh ? g_dev_w / vw : g_dev_h / vh;
     if (s < 1) s = 1;
     if (s > 4) s = 4;
-    if (g_c.px && g_c.scale == s && g_c.w == vw * s) return;
+    g_c.ox = mm_view_ox();
+    if (g_c.px && g_c.scale == s && g_c.w == vw * s && g_c.h == vh * s) { g_dirty = 1; return; }
     free(g_c.px);
     free(g_rgba);
     g_c.scale = s;
     g_c.w = vw * s;
     g_c.h = vh * s;
     g_c.stride = g_c.w;
-    g_c.ox = mm_view_ext();
+    g_c.orgx = g_c.orgy = 0;
     g_c.px = calloc((size_t)g_c.w * g_c.h, 4);
     g_rgba = malloc((size_t)g_c.w * g_c.h * 4);
     g_dirty = 1;
@@ -236,12 +239,17 @@ static void present(void)
     js_present(g_rgba, g_c.w, g_c.h);
 }
 
+/* runs at the display's rate (requestAnimationFrame). The core ticks every 50 ms; while it animates (mm_animating)
+ * at most every 33 ms (30 frames a second: on phones the music synth shares this thread and popped at 60, 2026-11-21) */
 static void frame(void)
 {
     double now = emscripten_get_now();
-    if (now >= g_next_tick) {                                   /* the core's 50 ms tick */
+    if (g_next_tick > now + 33 && mm_animating()) g_next_tick = now + 33;   /* started by input: fast ticks now */
+    if (now >= g_next_tick) {
         mm_tick();
-        g_next_tick = now + 50 > g_next_tick + 50 ? now + 50 : g_next_tick + 50;
+        int anim = mm_animating(), dt = anim ? 33 : 50;
+        g_next_tick = now + dt > g_next_tick + dt ? now + dt : g_next_tick + dt;
+        if (anim) g_dirty = 1;
     }
     for (int ch; (ch = music_take_ended()) >= 0;) mm_music_ended(ch);   /* a track reached its end */
     if (g_dirty) {
@@ -252,10 +260,15 @@ static void frame(void)
 }
 
 /* ---- called from shell.js ---- */
-EMSCRIPTEN_KEEPALIVE int web_start(int dev_w, int dev_h)
+/* dev_w x dev_h: the page in device pixels (chooses the canvas scale); css_w x css_h: in CSS pixels (its shape:
+ * portrait / landscape); touch: the Android app or a coarse pointer (shell.js MM.touch), for the "Automatic" layout */
+EMSCRIPTEN_KEEPALIVE int web_start(int dev_w, int dev_h, int css_w, int css_h, int touch)
 {
     g_dev_w = dev_w;
     g_dev_h = dev_h;
+    g_css_w = css_w;
+    g_css_h = css_h;
+    g_touch = touch;
     text_init("/fonts");
     FILE *sf = fopen("/soundfonts/list.txt", "r");             /* the SoundFonts: "file<TAB>name" lines (shell.js) */
     for (char line[160], path[200]; sf && fgets(line, sizeof line, sf);) {
@@ -269,6 +282,7 @@ EMSCRIPTEN_KEEPALIVE int web_start(int dev_w, int dev_h)
     if (sf) fclose(sf);
     char err[512] = "";
     if (!mm_init(err, sizeof err)) { js_error(err); return 0; }
+    mm_set_screen(g_css_w, g_css_h, g_touch);
     layout();
     g_started = 1;
     g_next_tick = emscripten_get_now();
@@ -276,14 +290,19 @@ EMSCRIPTEN_KEEPALIVE int web_start(int dev_w, int dev_h)
     return 1;
 }
 
-EMSCRIPTEN_KEEPALIVE void web_resize(int dev_w, int dev_h)
+EMSCRIPTEN_KEEPALIVE void web_resize(int dev_w, int dev_h, int css_w, int css_h, int touch)   /* also a rotation */
 {
     g_dev_w = dev_w;
     g_dev_h = dev_h;
-    if (g_started) layout();
+    g_css_w = css_w;
+    g_css_h = css_h;
+    g_touch = touch;
+    if (!g_started) return;
+    mm_set_screen(css_w, css_h, touch);                        /* another view: plat_view_changed -> layout */
+    layout();                                                  /* the same view: maybe another scale */
 }
 
-/* pointer in canvas pixels -> logical coordinates of the view (minus the widescreen margin) */
+/* pointer in canvas pixels -> logical coordinates of the view (minus the widescreen margin; y has none) */
 EMSCRIPTEN_KEEPALIVE void web_mouse(int X, int Y, int button, int action, int mods)
 {
     if (!g_started || !g_c.scale) return;
@@ -292,6 +311,11 @@ EMSCRIPTEN_KEEPALIVE void web_mouse(int X, int Y, int button, int action, int mo
 EMSCRIPTEN_KEEPALIVE void web_key(int key, int mods) { if (g_started) mm_key(key, mods); }
 EMSCRIPTEN_KEEPALIVE void web_char(unsigned ch) { if (g_started) mm_char(ch); }
 EMSCRIPTEN_KEEPALIVE void web_cmd(int cmd) { if (g_started) mm_cmd(cmd); }
+EMSCRIPTEN_KEEPALIVE void web_save(void) { if (g_started) mm_save_players(); }   /* the page / app goes away */
+EMSCRIPTEN_KEEPALIVE void web_activate(int on) { if (g_started) mm_activate(on); }   /* app paused / back: music, clock */
+EMSCRIPTEN_KEEPALIVE int web_text_input(void) { return g_started && mm_text_input(); }   /* show the phone keyboard */
+EMSCRIPTEN_KEEPALIVE const char *web_text_value(void) { return g_started ? mm_text_value() : ""; }
+EMSCRIPTEN_KEEPALIVE const char *web_text_label(void) { return g_started ? mm_text_label() : ""; }
 EMSCRIPTEN_KEEPALIVE void web_music_ended(int ch) { if (g_started) mm_music_ended(ch); }
 EMSCRIPTEN_KEEPALIVE void web_http_done(int tag, const char *data, int len) { mm_http_done(tag, data, len); }
 EMSCRIPTEN_KEEPALIVE int web_scale(void) { return g_c.scale; }

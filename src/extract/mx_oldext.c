@@ -5,11 +5,13 @@
  *
  *   edition  baggage (pictures, sounds)            program (tables)                          MIDI
  *   95 MPEG  ENCYC95/MM/INTERACT/MM95BAG.M12        ENCYC95/MM/INTERACT/MM95.EXE (16-bit)     ENCYC95/MM/MIDI
- *   96 Mac   Encarta Files/MindMaze Baggage (HFS)   Installer Files/Encarta 96, resource fork  - (QuickTime music)
+ *   96 Mac   Encarta Files/MindMaze Baggage (HFS)   Installer Files/Encarta 96, resource fork  Encarta Files/MIDI (QT)
  *   97       ENCYC97/MMBAG.M20                      AAMSSTP/ENCARTA/ENC97.EXE + ENCRES97.DLL  ENCYC97/MM/MIDI
  *   98       ENCYC98/MMBAG.M20                      SETUP.EXE (Wise installer: ENC98.EXE + DLL) ENCYC98/MM/MIDI
  *
- * The Mac edition has no Standard MIDI files, so a data folder made from it alone plays without music. */
+ * CHANGE 2026-11-21: the Mac edition has no Standard MIDI files: its "<name>.mid" files are QuickTime music movies
+ * (moov in the resource fork, events in the data fork). mx_old_midi converts them (mx_qtmusic.c), so a data folder
+ * made from that disc alone has the same music as the Windows editions (names as the game expects: intro.mid ...). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +23,7 @@ const MXOldEdition mx_old_editions[] = {
     {"enc95", "Encarta 95", 95, "ENCYC95/MM/INTERACT", "ENCYC95/MM/INTERACT/MM95BAG.M12", "ENCYC95/MM/INTERACT/MM95.EXE", NULL,
      NULL, "ENCYC95/MM/MIDI"},
     {"enc96", "Encarta 96 (Macintosh)", 96, "Encarta Files", "Encarta Files/MindMaze Baggage", "Installer Files/Encarta 96",
-     NULL, NULL, NULL},
+     NULL, NULL, "Encarta Files/MIDI"},                         /* QuickTime music movies (CHANGE 2026-11-21) */
     {"enc97", "Encarta 97", 97, "ENCYC97", "ENCYC97/MMBAG.M20", "AAMSSTP/ENCARTA/ENC97.EXE", "AAMSSTP/ENCARTA/ENCRES97.DLL",
      NULL, "ENCYC97/MM/MIDI"},
     {"enc98", "Encarta 98", 98, "ENCYC98", "ENCYC98/MMBAG.M20", NULL, NULL, "SETUP.EXE", "ENCYC98/MM/MIDI"},
@@ -74,6 +76,20 @@ static void bag_file(void *ctx, const char *name, const uint8_t *d, size_t n)
         b->failed = 1;
     } else snprintf(b->names[b->nnames++], sizeof b->names[0], "%s", nm);
     free(out);
+}
+
+/* a disc's music file as a Standard MIDI file (CHANGE 2026-11-21, see mx_oldext.h): an SMF is returned as it is; a
+ * QuickTime music movie (Encarta 96 Mac: HFS type MooV, the moov atom in the resource fork) is converted */
+uint8_t *mx_old_midi(MXOldRead rd, void *ctx, const char *path, size_t *len)
+{
+    size_t dn = 0, rn = 0;
+    uint8_t *d = rd(ctx, path, 0, &dn);
+    if (!d || (dn >= 4 && !memcmp(d, "MThd", 4))) { *len = dn; return d; }
+    uint8_t *r = rd(ctx, path, 1, &rn);                           /* ISO 9660 / folders: no forks (the data again) */
+    uint8_t *smf = mx_qtmusic_to_smf(d, dn, r, rn, len, NULL, NULL, 0);
+    free(d);
+    free(r);
+    return smf;
 }
 
 /* a name from the tables (".DI$" spellings included) is among the written files */
@@ -157,8 +173,8 @@ int mx_old_build(MXIO *io, MXOldRead rd, void *ctx, const MXOldEdition *ed, MXOl
         snprintf(nm, sizeof nm, "%s", t->music[i]);
         lower(nm);
         snprintf(p, sizeof p, "%s/%s", ed->midi, nm);
-        uint8_t *mid = rd(ctx, p, 0, &ml);
-        if (mid && ml >= 4 && !memcmp(mid, "MThd", 4) && io->write(io, nm, mid, ml)) c->mid++;
+        uint8_t *mid = mx_old_midi(rd, ctx, p, &ml);                 /* SMF, or the Mac's QuickTime music converted */
+        if (mid && io->write(io, nm, mid, ml)) c->mid++;
         free(mid);
     }
     c->dib = b->ndib;

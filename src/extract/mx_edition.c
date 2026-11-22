@@ -4,7 +4,8 @@
  * ATRIUM / FINALET / G-FINAL). mx_add_edition reads an older disc's question files and music:
  *
  *   Encarta 95 (MPEG ed.)  ISO 9660  ENCYC95/MM/INTERACT/MINDMAZE.DB|IDX, ENCYC95/MM/MIDI/(name).MID
- *   Encarta 96 (Macintosh) HFS       Encarta Files/MindMaze Data|Index (music: QuickTime, not used)
+ *   Encarta 96 (Macintosh) HFS       Encarta Files/MindMaze Data|Index, Encarta Files/MIDI/(name).mid (QuickTime
+ *                                    music movies, converted to SMF by mx_qtmusic.c; CHANGE 2026-11-21)
  *   Encarta 97             ISO 9660  ENCYC97/MINDMAZE.DB|IDX, ENCYC97/MM/MIDI/(name).MID
  *   Encarta 98             ISO 9660  ENCYC98/MINDMAZE.DB|IDX, ENCYC98/MM/MIDI/(name).MID
  *   Encarta 2006           ISO 9660  EE/ENCARTA/MINDMAZE.DB|IDX (added as an extra source to a data folder made
@@ -537,7 +538,10 @@ static void copy_music(MXIO *io, Found *F)
         size_t ml = 0;
         char p[160];
         uint8_t *mid = NULL;
-        if (F->ed->midi) { snprintf(p, sizeof p, "%s/%s.MID", F->ed->midi, MUSIC[i]); mid = old_read(&F->r, p, 0, &ml); }
+        if (F->ed->midi) {                         /* CHANGE 2026-11-21: the Mac's QuickTime music is converted */
+            snprintf(p, sizeof p, "%s/%s.MID", F->ed->midi, MUSIC[i]);
+            mid = mx_old_midi(old_read, &F->r, p, &ml);
+        }
         else if (F->ed == &F->own) {
             snprintf(p, sizeof p, "MM/MIDI/%s.MID", MUSIC[i]);
             if (!(mid = folder_read(&F->s, p, &ml))) { snprintf(p, sizeof p, "%s.MID", MUSIC[i]); mid = folder_read(&F->s, p, &ml); }

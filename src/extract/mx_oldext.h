@@ -22,3 +22,18 @@ int mx_extract_old(MXIO *io, const char *source, char *id, int idlen, char *name
 
 /* pictures, sounds, the main music, tables.json and res/<id>.bmp into the data folder (questions: mx_edition.c) */
 int mx_old_build(MXIO *io, MXOldRead rd, void *ctx, const MXOldEdition *ed, MXOldCounts *c, char *err, int errlen);
+
+/* CHANGE 2026-11-21: QuickTime music movie (the Encarta 96 Mac disc's music) -> Standard MIDI file (mx_qtmusic.c).
+ * data / rsrc = the file's data and resource forks (rsrc may be NULL for a flattened movie). Returns the malloc'd
+ * SMF (*outlen bytes) or NULL with the reason in err. stats (optional) counts what was converted / left out. */
+typedef struct {
+    int parts, programs, notes, controllers, restrikes, samples, division, end_ticks;
+    int media_end;               /* the movie's length in its timescale (the SMF ends at the last note-off instead) */
+    int unmapped;                /* QuickTime-only controllers, knobs, silent notes: not in the SMF */
+} MXQtStats;
+uint8_t *mx_qtmusic_to_smf(const uint8_t *data, size_t dn, const uint8_t *rsrc, size_t rn, size_t *outlen, MXQtStats *stats,
+                           char *err, int errlen);
+
+/* a music file of an older disc as a Standard MIDI file: the file itself if it is one, else a QuickTime music movie
+ * (data + resource fork read through rd) converted; NULL if missing or neither (mx_oldext.c) */
+uint8_t *mx_old_midi(MXOldRead rd, void *ctx, const char *path, size_t *len);

@@ -28,9 +28,18 @@ var MM = {
     c.style.left = Math.round((W - c.width * k) / 2) + "px";
     c.style.top = Math.round((H - c.height * k) / 2) + "px";
   },
+  /* the page for web_start / web_resize (CHANGE 2026-11-21, touch layout): device pixels (the canvas scale), CSS pixels
+   * (the shape: portrait or landscape) and touch = the Android app or a coarse primary pointer (the core's "Automatic"
+   * layout setting uses the touch layout then) */
   devSize: function () {
     var d = window.devicePixelRatio || 1;
-    return [Math.round(window.innerWidth * d), Math.round(window.innerHeight * d)];
+    return [Math.round(window.innerWidth * d), Math.round(window.innerHeight * d),
+            window.innerWidth, window.innerHeight, MM.touch() ? 1 : 0];
+  },
+  touch: function () {
+    var C = window.Capacitor;
+    if (C && (C.isNativePlatform ? C.isNativePlatform() : C.Plugins && C.Plugins.App)) return true;
+    return !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
   },
 
   /* ---- sound ---- */
@@ -38,7 +47,7 @@ var MM = {
     if (!MM.audio) {
       var A = window.AudioContext || window.webkitAudioContext;
       if (A) {
-        MM.audio = new A();
+        try { MM.audio = new A({ latencyHint: "playback" }); } catch (e) { MM.audio = new A(); }   /* larger output buffer: no pops on phones */
         /* limiter on the master output: music and sound effects together never clip the speakers */
         var L = MM.audio.createDynamicsCompressor();
         L.threshold.value = -6; L.knee.value = 4; L.ratio.value = 20; L.attack.value = 0.002; L.release.value = 0.2;
@@ -48,7 +57,7 @@ var MM = {
     }
     if (MM.audio && MM.audio.state === "suspended") MM.audio.resume();
     if (MM.audio && !MM.musicNode && Module._web_music_render) {   /* music: rendered by web_music.c */
-      var a = MM.audio, n = 4096;
+      var a = MM.audio, n = 16384;   /* ~0.37 s per block: the synth runs on the main thread, which drawing can hold up (CHANGE 2026-11-21: 4096 popped on phones) */
       Module._web_music_rate(a.sampleRate);
       MM.musicBuf = Module._malloc(n * 2 * 4);
       MM.musicNode = a.createScriptProcessor(n, 0, 2);
@@ -124,7 +133,8 @@ var MM = {
   mods: function (e) { return (e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0); },
   KEYS: { Enter: 13, Escape: 27, Backspace: 8, Tab: 9, Delete: 127, F2: 0x71, F3: 0x72 },
 
-  /* test hook: a tap at logical coordinates of the 636x437 view */
+  /* test hook: a tap at logical coordinates of the view (the 636x437 game area at 0,0; widescreen margins at x < 0,
+   * the touch column at x >= 636 or y >= 437); canvas pixel = (x + ox) * scale, y * scale */
   tap: function (x, y) {
     var s = Module._web_scale(), e = MM.ext(), X = (x + e) * s + 1, Y = y * s + 1;
     Module._web_mouse(X, Y, 0, 2, 0);
@@ -196,7 +206,7 @@ function startGame() {
   var d = MM.devSize();
   MM.msg.style.display = "flex";
   MM.msg.textContent = "Starting MindMaze...";
-  if (!Module._web_start(d[0], d[1])) return;
+  if (!Module._web_start(d[0], d[1], d[2], d[3], d[4])) return;
   MM.msg.style.display = "none";
   document.getElementById("import").style.display = "none";
   MM.canvas.focus();
@@ -490,23 +500,41 @@ var Module = {
 };
 
 /* ---- events ---- */
-window.addEventListener("resize", function () {
+MM.resized = function () {                                 /* also a rotation: the view may change shape */
   if (!Module._web_resize) return;
   var d = MM.devSize();
-  Module._web_resize(d[0], d[1]);
+  Module._web_resize(d[0], d[1], d[2], d[3], d[4]);
   MM.fit();
-});
+};
+window.addEventListener("resize", MM.resized);
+window.addEventListener("orientationchange", function () { setTimeout(MM.resized, 100); });   /* (some WebViews resize late) */
+/* always landscape (user 2026-11-21: portrait is not supported, no "turn your phone" note): the layout is the landscape
+ * one at any shape; a phone browser is asked to lock landscape too (works only in fullscreen / installed web apps,
+ * fails quietly elsewhere; the Android app is locked in its manifest) */
+function mmLockLandscape() {
+  try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(function () {}); } catch (e) {}
+}
+document.addEventListener("pointerdown", mmLockLandscape, { once: true });
+document.addEventListener("fullscreenchange", mmLockLandscape);
+if (window.matchMedia) {                                   /* a mouse plugged in / removed (tablets): "Automatic" follows */
+  var coarse = window.matchMedia("(pointer: coarse)");
+  if (coarse.addEventListener) coarse.addEventListener("change", MM.resized);
+}
 var cv = MM.canvas;
 cv.addEventListener("pointermove", function (e) { var p = MM.point(e); Module._web_mouse(p[0], p[1], 0, 2, MM.mods(e)); });
 cv.addEventListener("pointerdown", function (e) {
   e.preventDefault();
   MM.ensureAudio();
-  cv.focus();
+  if (document.activeElement !== MM.kbd) cv.focus();      /* (typing: the keyboard stays up) */
   var p = MM.point(e), b = e.button === 2 ? 2 : 1;
   Module._web_mouse(p[0], p[1], 0, 2, MM.mods(e));         /* touch has no hover: move there first */
   Module._web_mouse(p[0], p[1], b, 0, MM.mods(e));
 });
-cv.addEventListener("pointerup", function (e) { var p = MM.point(e); Module._web_mouse(p[0], p[1], e.button === 2 ? 2 : 1, 1, MM.mods(e)); });
+cv.addEventListener("pointerup", function (e) {
+  var p = MM.point(e);
+  Module._web_mouse(p[0], p[1], e.button === 2 ? 2 : 1, 1, MM.mods(e));
+  MM.syncKeyboard();                                       /* in the tap itself: Android opens the keyboard only then */
+});
 cv.addEventListener("dblclick", function (e) { var p = MM.point(e); Module._web_mouse(p[0], p[1], 1, 3, MM.mods(e)); });
 cv.addEventListener("wheel", function (e) { e.preventDefault(); var p = MM.point(e); Module._web_mouse(p[0], p[1], e.deltaY < 0 ? 1 : -1, 4, 0); }, { passive: false });
 cv.addEventListener("contextmenu", function (e) { e.preventDefault(); });
@@ -587,3 +615,97 @@ function updShow(rel, cur, apk, sum) {
     MM.canvas.focus();
   };
 }
+
+/* ---- saving when the app goes away (CHANGE 2026-11-21): Android may end a paused app without another event, and a
+ * closed browser tab gets none either. Players (localStorage) are saved and /user is written to IndexedDB at once. */
+MM.saveNow = function () {
+  if (!window.mmReady) return;
+  try { Module._web_save(); } catch (e) {}
+  clearTimeout(MM.persistTimer);
+  try { FS.syncfs(false, function () {}); } catch (e) {}
+};
+/* the app in the background (CHANGE 2026-11-21, user: "when suspending the app, game should suspend too"): saved, then
+ * paused like the original when its window was inactive (mm_activate: music stops, a question's clock waits) and the
+ * WebAudio output suspended (sound effects, and the music synth's callback); everything resumes on return */
+MM.suspended = false;
+MM.suspend = function (on) {
+  if (!window.mmReady || on === MM.suspended) return;
+  MM.suspended = on;
+  if (on) MM.saveNow();
+  try { Module._web_activate(on ? 0 : 1); } catch (e) {}
+  if (MM.audio) { try { if (on) MM.audio.suspend(); else MM.audio.resume(); } catch (e) {} }
+};
+document.addEventListener("visibilitychange", function () { MM.suspend(document.visibilityState === "hidden"); });
+window.addEventListener("pagehide", function () { MM.suspend(true); });
+window.addEventListener("pageshow", function () { if (document.visibilityState === "visible") MM.suspend(false); });
+(function () {
+  var App = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+  if (!App) return;
+  App.addListener("pause", function () { MM.suspend(true); });
+  App.addListener("resume", function () { MM.suspend(false); });
+})();
+
+/* ---- typing on a phone (CHANGE 2026-11-21): while the game takes text (a new player's name, Settings > Add a
+ * Question: Module._web_text_input), the box #typing at the top of the screen shows the field's name and its text in
+ * the input #kbd, which is focused - that opens the on-screen keyboard, and the box stays visible above it (the
+ * keyboard covers the lower part of the game, where the name field is). Otherwise the box hides and the keyboard
+ * closes. The game's text is the truth (Module._web_text_value): Android keyboards send words through composition and
+ * often no usable key codes, so every change of the input is compared with the previous value and replayed as
+ * Backspace keys and characters, then the input is set back to the game's text (which may refuse characters, e.g.
+ * names longer than 12). Backspace in an empty box comes as a key; Enter (or Done), Tab and Escape as keys. */
+MM.kbd = document.getElementById("kbd");
+(function () {
+  var kbd = MM.kbd, box = document.getElementById("typing"), label = document.getElementById("typing-label");
+  var prev = "", composing = false, shown = false, lastLabel = "";
+  var gameText = function () { return UTF8ToString(Module._web_text_value()); };
+  var fill = function () {                                  /* the input = the game's text, caret at the end */
+    var t = gameText();
+    if (kbd.value !== t) kbd.value = t;
+    prev = t;
+    try { kbd.setSelectionRange(t.length, t.length); } catch (e) {}
+  };
+  MM.syncKeyboard = function () {
+    if (!window.mmReady) return;
+    if (Module._web_text_input()) {
+      var l = UTF8ToString(Module._web_text_label());
+      if (!shown || l !== lastLabel) { label.textContent = l; lastLabel = l; if (!composing) fill(); }
+      if (!shown) { box.style.display = "flex"; shown = true; }
+      if (document.activeElement !== kbd) kbd.focus({ preventScroll: true });
+    } else if (shown) {
+      shown = false;
+      box.style.display = "none";
+      if (document.activeElement === kbd) kbd.blur();
+      MM.canvas.focus();
+    }
+  };
+  var key = function (k, mods) {
+    Module._web_key(k, mods || 0);
+    composing = false;
+    fill();
+    MM.syncKeyboard();
+  };
+  kbd.addEventListener("compositionstart", function () { composing = true; });
+  kbd.addEventListener("compositionend", function () { composing = false; setTimeout(function () { if (shown) fill(); }, 0); });
+  kbd.addEventListener("input", function () {
+    var v = kbd.value, i = 0;
+    while (i < prev.length && i < v.length && prev[i] === v[i]) i++;
+    for (var k = prev.length; k > i; k--) Module._web_key(MM.KEYS.Backspace, 0);
+    Array.from(v.slice(i)).forEach(function (ch) {
+      if (ch === "\n") Module._web_key(MM.KEYS.Enter, 0);
+      else Module._web_char(ch.codePointAt(0));
+    });
+    prev = v;
+    if (!composing) fill();                                 /* what the game kept (length limits) */
+    MM.syncKeyboard();
+  });
+  kbd.addEventListener("keydown", function (e) {
+    if (e.key === "Backspace" && kbd.value === "") { e.preventDefault(); key(MM.KEYS.Backspace); return; }
+    var k = e.key === "Enter" ? MM.KEYS.Enter : e.key === "Tab" ? MM.KEYS.Tab : e.key === "Escape" ? MM.KEYS.Escape : 0;
+    if (!k) return;                                         /* letters and Backspace arrive through "input" */
+    e.preventDefault();
+    key(k, MM.mods(e));
+  });
+  var done = document.getElementById("typing-done");
+  done.addEventListener("pointerdown", function (e) { e.preventDefault(); });   /* keep the keyboard up */
+  done.addEventListener("click", function () { key(MM.KEYS.Enter); });
+})();

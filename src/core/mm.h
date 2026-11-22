@@ -29,14 +29,21 @@ typedef struct { const char *name, *image; int min, max; } MMRank;
 /* ---- drawing ---- */
 /* px = 0x00RRGGBB. ox: left margin in logical pixels (widescreen: the 636 px view keeps its coordinates and
  * the extensions are drawn at x -ox..-1 and 636..636+ox-1); every drawing function adds it. */
-typedef struct { uint32_t *px; int w, h, stride, scale, ox; } MMCanvas;
+/* orgx, orgy (CHANGE 2026-11-21): device-pixel position of px[0] inside the platform's drawing surface. 0 for the
+ * platform's canvas; a sub-canvas (mm_canvas_sub: the touch layout's column, drawn at another zoom) points px into
+ * the same buffer and sets them, so a platform that draws text through its own surface (Windows GDI) adds them.
+ * scale may then differ from the platform canvas' scale (a whole multiple of it): fonts must follow c->scale. */
+typedef struct { uint32_t *px; int w, h, stride, scale, ox, orgx, orgy; } MMCanvas;
 typedef struct { int w, h; uint32_t *px; } MMImage;                     /* px = 0xAARRGGBB, A 0 = clear */
 
 /* FONT_NAME: player name and answer letters (RCDATA 4931, Times New Roman 18), FONT_SCORE: Progress line (RCDATA 4916,
  * Arial 12), FONT_ANSWER(_I): answer buttons (Tahoma 11, centred, from a screenshot of the original; RCDATA 4929 says Times New Roman 14) */
+/* CHANGE 2026-11-21, touch layout and "Large text" (Settings > Modern options), sans faces (Tahoma / Liberation Sans),
+ * em height in logical pixels: FONT_T 14, FONT_T_B 14 bold, FONT_T_H 18 bold (headings), FONT_T_L 17, FONT_T_LB 17 bold,
+ * FONT_Q_L 13 and FONT_Q_LI 13 italic (question / speech / message text with Large text on, classic layout) */
 enum { FONT_TEXT, FONT_BOLD, FONT_LIST, FONT_SMALL, FONT_NAME, FONT_LEVEL, FONT_ITALIC, FONT_POINTS, FONT_SCORE, FONT_ANSWER,
-       FONT_ANSWER_I, FONT_COUNT };
-enum { TX_LEFT = 0, TX_CENTER = 1, TX_RIGHT = 2, TX_VCENTER = 4, TX_WRAP = 8, TX_ELLIPSIS = 16 };
+       FONT_ANSWER_I, FONT_T, FONT_T_B, FONT_T_H, FONT_T_L, FONT_T_LB, FONT_Q_L, FONT_Q_LI, FONT_COUNT };
+enum { TX_LEFT = 0, TX_CENTER = 1, TX_RIGHT = 2, TX_VCENTER = 4, TX_WRAP = 8, TX_ELLIPSIS = 16, TX_MEASURE = 32 };   /* MEASURE: mm_rich only */
 
 /* ---- platform interface (implemented per platform) ---- */
 uint32_t plat_ticks(void);                                        /* GetTickCount */
@@ -139,6 +146,8 @@ void mm_http_done(int tag, const char *data, int len);            /* platform: p
 
 /* ---- settings screen on the logon page (mm_settings.c) ---- */
 int mm_settings_on(void);
+int mm_settings_typing(void);                                      /* the open page has text fields */
+const char *mm_settings_field(const char **label);                /* its focused field's text and name */
 void mm_settings_open(void);
 void mm_settings_draw(MMCanvas *c, int mx, int my);
 int mm_settings_hit(int x, int y);                                /* clickable id under (x, y), 0 = none */
@@ -176,6 +185,9 @@ char *mm_strdup(const char *s);
 char *mm_cp1252_to_utf8(const unsigned char *s, int len);
 void mm_plain(const char *src, char *out, int n);                 /* question text without tags */
 void mm_rich(MMCanvas *c, int x, int y, int w, int h, const char *text, int font, int italic_font, uint32_t rgb, int flags);
+int mm_rich_height(MMCanvas *c, int w, const char *text, int font, int italic_font);   /* logical height of the wrapped text */
+int mm_rich_page(MMCanvas *c, int x, int y, int w, int h, const char *text, int font, int italic_font, uint32_t rgb,
+                 int page, int chars, int *npages, int *nlines);   /* one page of the wrapped text, at most chars letters (-1 all) */
 const char *mm_str(int id);                                       /* ENCARTAR.DLL string */
 
 /* ---- game (mm_game.c) ---- */
@@ -183,7 +195,7 @@ enum { MMB_LEFT = 1, MMB_RIGHT = 2 };
 enum { MA_DOWN, MA_UP, MA_MOVE, MA_DOUBLE, MA_WHEEL };   /* MA_WHEEL: button = +1 up / -1 down */
 enum { MMOD_SHIFT = 1, MMOD_CTRL = 2 };
 enum { KEY_ENTER = 13, KEY_ESC = 27, KEY_BACK = 8, KEY_TAB = 9, KEY_DELETE = 127 };
-enum { CMD_NEW_GAME = 1, CMD_QUIT, CMD_MUSIC, CMD_SOUND, CMD_HD, CMD_WIDE };
+enum { CMD_NEW_GAME = 1, CMD_QUIT, CMD_MUSIC, CMD_SOUND, CMD_HD, CMD_WIDE, CMD_SETTINGS, CMD_EXIT };   /* QUIT: back to the gate; EXIT: end the program */
 enum { KEY_F2 = 0x71, KEY_F3 = 0x72 };
 
 extern int mm_music_on, mm_sound_on;
@@ -198,3 +210,57 @@ void mm_tick(void);                   /* call about every 50 ms */
 void mm_cmd(int cmd);
 void mm_music_ended(int channel);     /* platform: a music track finished */
 void mm_shutdown(void);               /* save players */
+void mm_save_players(void);           /* platform: app to the background / ending - save, the game goes on */
+int mm_text_input(void);              /* 1 while a text field takes typing: a phone shows its keyboard (web) */
+const char *mm_text_value(void);      /* that field's text (UTF-8) */
+const char *mm_text_label(void);      /* what it is ("New player's name", "Correct answer", ...) */
+
+/* ---- Modern options (CHANGE 2026-11-21, Settings > Modern options; all off = the classic game) ---- */
+enum { MM_LAYOUT_AUTO, MM_LAYOUT_CLASSIC_ONLY, MM_LAYOUT_TOUCH_ONLY };   /* the setting */
+typedef struct {
+    int resume;          /* continue an unfinished game */
+    int hints;           /* 50/50 hint during a question (halves its points) */
+    int prompts;         /* "your turn" prompts between players + player stats */
+    int layout;          /* MM_LAYOUT_*: auto = touch layout on touch screens */
+    int bigtext;         /* large text and high contrast */
+    int anim;            /* animations */
+} MMOptions;
+extern MMOptions mm_opt;
+void mm_options_load(void);           /* from the settings (mm_init) */
+void mm_options_save(void);
+void mm_options_classic(void);        /* all off */
+int mm_options_classic_on(void);      /* every modern option off (the "Classic MindMaze" switch) */
+void mm_options_classic_set(int on);  /* on: all off, the choices kept; off: those choices back */
+
+/* the view (CHANGE 2026-11-21): its logical size depends on the layout. Classic: MM_W + 2 * mm_view_ext() x MM_H
+ * (widescreen) with ox = mm_view_ext(). Touch, landscape: 936 x 437 (the 636 x 437 game + a 300 px touch column on the
+ * right). Touch, portrait: 636 x 1311 (the game on top, the column below at twice the size). Touch layouts have no
+ * widescreen (ox 0). The platform sizes its canvas from mm_view_w / mm_view_h and mm_view_ox, and maps the pointer
+ * as before: logical x = canvas x / scale - ox. */
+enum { MM_VIEW_CLASSIC, MM_VIEW_TOUCH_WIDE, MM_VIEW_TOUCH_TALL };
+void mm_set_screen(int w, int h, int touch);   /* platform: the window / screen in pixels (any unit, only the ratio
+                                                  counts), touch = the main input is a touch screen. Call at start and
+                                                  on every resize / rotation; calls plat_view_changed if the view
+                                                  changes */
+int mm_view(void);                    /* MM_VIEW_* now */
+int mm_view_w(void);
+int mm_view_h(void);
+int mm_view_ox(void);
+int mm_view_strip(void);              /* height of the strip under the room (touch views) */
+/* a canvas for the rectangle (x, y, w, h) of c (logical units of c) drawn at zoom times c's scale (zoom >= 1, whole) */
+MMCanvas mm_canvas_sub(const MMCanvas *c, int x, int y, int w, int h, int zoom);   /* x, y: units of c; w, h: of the sub */
+/* animations: 1 while something moves - the platform then calls mm_tick and redraws at the display's rate
+ * (about 60 per second) instead of every 50 ms */
+int mm_animating(void);
+
+/* ---- player stats (mm_stats.c, CHANGE 2026-11-21; part of Modern options > "Turn prompts and player stats") ---- */
+void mm_stats_answer(const char *player, int area, int level, int result, int seconds_left);   /* result: 1 right at
+                                                  the first try, 2 right at the second, 0 wrong (twice) or the time ran out */
+void mm_stats_stairs(const char *player);       /* a maze finished */
+void mm_stats_forget(const char *player);       /* the player was deleted on the logon screen */
+int mm_stats_on(void);                           /* the stats screen is open */
+void mm_stats_open(void);                        /* all saved players' stats (logon screen button "Stats") */
+void mm_stats_draw(MMCanvas *c, int mx, int my);  /* in the 636 x 437 dialog space, like the settings */
+int mm_stats_hit(int x, int y);                  /* clickable id, 0 = none */
+void mm_stats_mouse(int x, int y, int button, int action);
+void mm_stats_key(int key);

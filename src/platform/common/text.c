@@ -26,6 +26,10 @@ static const struct { int face, px; } FONTDEF[FONT_COUNT] = {
     [FONT_SMALL] = {F_SANS, 9},    [FONT_NAME] = {F_SERIF, 18},    [FONT_LEVEL] = {F_PAGELLA_I, 25},
     [FONT_ITALIC] = {F_SANS_I, 11}, [FONT_POINTS] = {F_SERIF_B, 24}, [FONT_SCORE] = {F_SANS, 12},
     [FONT_ANSWER] = {F_SANS, 11},  [FONT_ANSWER_I] = {F_SANS_I, 11},
+    /* Modern options (touch layout, Large text; CHANGE 2026-11-21) */
+    [FONT_T] = {F_SANS, 14},       [FONT_T_B] = {F_SANS_B, 14},    [FONT_T_H] = {F_SANS_B, 18},
+    [FONT_T_L] = {F_SANS, 17},     [FONT_T_LB] = {F_SANS_B, 17},   [FONT_Q_L] = {F_SANS, 13},
+    [FONT_Q_LI] = {F_SANS_I, 13},
 };
 
 int text_init(const char *dir)
@@ -143,7 +147,8 @@ static void draw_run(MMCanvas *c, int X, int Y, const char *s, int n, int font, 
     }
 }
 
-/* ---- the platform text functions (mm.h) ---- */
+/* ---- the platform text functions (mm.h). A sub-canvas (mm_canvas_sub: px into the same buffer, its own w / h and
+ * scale) needs nothing special here: drawing is relative to c->px and clipped to c->w x c->h, sizes follow c->scale. ---- */
 int text_px_width(MMCanvas *c, const char *s, int font) { return measure_n(s, (int)strlen(s), font, c->scale); }
 int text_px_height(MMCanvas *c, int font) { int a, h; vmetrics(font, c->scale, &a, &h); return h; }
 int text_px_ascent(MMCanvas *c, int font) { int a, h; vmetrics(font, c->scale, &a, &h); return a; }

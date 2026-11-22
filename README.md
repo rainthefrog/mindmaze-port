@@ -38,7 +38,7 @@ edition's own program by patterns, so it does not depend on exact file versions.
 | **Encarta 2006 Premium** | `EE/ENCARTA/`: ENCARTA.EXE, ENCARTAR.DLL, MINDMAZE.DB, .IDX, .EIT | reference edition, 8,020 questions |
 | Encarta 98 (Win95 or Win98 edition, disc 1) | `ENCYC98/MMBAG.M20`, MINDMAZE.DB/.IDX, `MM/MIDI`, the program inside `SETUP.EXE` | 7,758 questions |
 | Encarta 97 | `ENCYC97/MMBAG.M20`, MINDMAZE.DB/.IDX, `MM/MIDI`, `AAMSSTP/ENCARTA/ENC97.EXE` + `ENCRES97.DLL` | 9,035 questions |
-| Encarta 96 (Macintosh) | the HFS disc: `Encarta Files/MindMaze *`, the application in `Installer Files` | 9,193 questions; no music (it is in QuickTime format) |
+| Encarta 96 (Macintosh) | the HFS disc: `Encarta Files/MindMaze *`, the application in `Installer Files` | 9,193 questions; the music (QuickTime music movies in `Encarta Files/MIDI`) is converted to MIDI files |
 | Encarta 95 (MPEG edition) | `ENCYC95/MM/INTERACT/` (MM95BAG.M12, MM95.EXE, MINDMAZE.DB/.IDX), `MM/MIDI` | 9,198 questions; no title picture |
 
 Pictures, sounds and the main music are the same in every edition; the questions differ, and some texts are
@@ -76,7 +76,8 @@ disc, please open an issue with its message.
 3. It copies what the game needs into a `data` folder next to the exe (or `%LOCALAPPDATA%\MindMaze` when the
    exe's folder is not writable), which takes a few seconds, and starts. The disc is not needed afterwards.
 
-Keys: F2 HD art, F3 widescreen (when that art is present, see below), F11 full screen.
+Keys: F2 HD art, F3 widescreen (when that art is present, see below), F11 full screen. Settings: the button on the
+castle-gate page, the gear in the top right corner of a room, or MindMaze menu > Settings...
 
 ## Quick start (Linux)
 
@@ -123,6 +124,7 @@ Everything works from the game itself; the flags are for launchers and scripts. 
 | `--hd`, `--no-hd`, `--wide`, `--no-wide` | HD pictures, widescreen view on / off (once made) |
 | `--music <0-100>`, `--sound <0-100>` | volumes (0 = off) |
 | `--no-title` | skip the title screen |
+| `--classic` / `--modern` | all modern options off / on, for this run (see Modern options) |
 | `--set <key>=<value>` | any `mindmaze.ini` setting |
 | `--home <dir>` | keep everything (`data/`, `mindmaze.ini`, players) in `<dir>` |
 | `--disc <path>` or just `<path>` | first start: the Encarta disc image, folder or a file on it; no questions asked |
@@ -138,6 +140,14 @@ saved as usual). The actions (`--add-disc`, `--export`, `--prepare-art`, `--inst
 exit: code 0 = done, 1 = failed (reason on stderr), 2 = wrong usage. With `--disc` they also build the data folder
 first, so `MindMaze --home ~/Games/mm --disc Encarta.iso --prepare-art` sets everything up without a window.
 `--opt=value` works as well as `--opt value`.
+
+## Modern options
+
+Settings > *Modern options* has six switches: **Continue unfinished games**, **Hints** (50/50, halves the points),
+**Turn prompts and player stats**, **Layout** (Auto / Classic / Touch: big buttons beside the room; phones and tablets
+play in landscape), **Large text and high contrast**, **Animations**. The *Classic MindMaze* switch turns them all off
+(the game then plays and looks like the original) and back on as they were; `--classic` / `--modern` do the same for
+one run.
 
 ## Updates
 

@@ -60,6 +60,8 @@ const char *cli_usage(void)
            "      --music <0-100>      music volume (0 = off)\n"
            "      --sound <0-100>      sound effects volume (0 = off)\n"
            "      --no-title           skip the title screen\n"
+           "      --classic            Classic MindMaze: all modern options off (this run)\n"
+           "      --modern             the modern options on (this run)\n"
            "      --set <key>=<value>  any mindmaze.ini setting\n"
            "      --no-update-check    do not look for a new version at start (for launchers that update)\n"
            "\n"
@@ -118,6 +120,12 @@ int cli_parse(int argc, char **argv, char *err, int errlen)
         else if (!strcmp(a, "--wide")) override("widescreen", "1");
         else if (!strcmp(a, "--no-wide")) override("widescreen", "0");
         else if (!strcmp(a, "--no-title")) override("title_seconds", "0");
+        else if (!strcmp(a, "--classic") || !strcmp(a, "--modern")) {   /* the "Classic MindMaze" switch, this run only */
+            int m = !strcmp(a, "--modern");
+            static const char *const K[5] = {"opt_resume", "opt_hints", "opt_prompts", "opt_bigtext", "opt_anim"};
+            for (int k = 0; k < 5; k++) if (m ? k != 3 : 1) override(K[k], m ? "1" : "0");
+            override("opt_layout", m ? "0" : "1");
+        }
         else if (!strcmp(a, "--music")) { VALUE(); if (!volume(a, v, 1, err, errlen)) return 0; }
         else if (!strcmp(a, "--sound")) { VALUE(); if (!volume(a, v, 0, err, errlen)) return 0; }
         else if (!strcmp(a, "--set")) {

@@ -64,7 +64,7 @@ jobs:
           test -n "$KEYSTORE_BASE64" || { echo "::error::secret ANDROID_KEYSTORE_BASE64 is missing"; exit 1; }
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/mindmaze-release.jks"
           export ANDROID_KEYSTORE="$RUNNER_TEMP/mindmaze-release.jks"
-          export APP_VERSION_NAME="${GITHUB_REF_NAME#v}" APP_VERSION_CODE="${{ github.run_number }}"
+          export APP_VERSION_NAME="${GITHUB_REF_NAME#v}"
           make android
           rm -f "$RUNNER_TEMP/mindmaze-release.jks"
       - name: The APK carries the app's certificate

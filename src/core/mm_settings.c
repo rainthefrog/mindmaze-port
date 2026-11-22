@@ -40,6 +40,14 @@ static struct {
 static int inside(int x, int y, int rx, int ry, int rw, int rh) { return x >= rx && y >= ry && x < rx + rw && y < ry + rh; }
 
 int mm_settings_on(void) { return S.on; }
+int mm_settings_typing(void) { return S.on && S.page == 1; }   /* "Add a Question": its fields take text */
+/* the field being typed in and its name (the phone shows them above its keyboard, CHANGE 2026-11-21) */
+const char *mm_settings_field(const char **label)
+{
+    static const char *const NAME[NFIELD] = {"Question (the clue)", "Correct answer", "Wrong answer 1", "Wrong answer 2", "Wrong answer 3"};
+    *label = NAME[S.focus];
+    return S.f[S.focus];
+}
 
 void mm_settings_open(void)
 {
@@ -68,7 +76,11 @@ static int field_h(int f) { return f == F_QUESTION ? 64 : 18; }
  * 40+f field, 50/51 area </>, 60+l level, 70 save, 71 back, 80/81 volume, 82 instruments, 83 export,
  * 84 add questions from a disc,
  * pictures page: 34 widescreen, 36 HD, 37 how-to web page, 38 open the art kit folder, 39 back, 90 install */
-enum { PAGE_SOURCES, PAGE_ADD, PAGE_PICTURES };
+enum { PAGE_SOURCES, PAGE_ADD, PAGE_PICTURES, PAGE_MODERN };
+/* Modern options page (CHANGE 2026-11-21): 100 resume, 101 hints, 102 prompts + stats, 104 large text, 105 animations,
+ * 110..112 layout auto / classic / touch, 120 "Classic MindMaze" (all off), 121 back; main page: 122 opens it */
+static const int MOD_Y[6] = {PY + 50, PY + 86, PY + 122, PY + 184, PY + 238, PY + 274};
+static const int LAY_X[3] = {PX + 90, PX + 200, PX + 300};
 static int pic_y(int row) { return PY + 50 + 26 * row; }
 int mm_settings_hit(int x, int y)
 {
@@ -83,9 +95,18 @@ int mm_settings_hit(int x, int y)
         for (int k = 0; k < 2; k++) if (inside(x, y, VOL_X - 6, vol_y(k) - 2, VOL_W + 12, 20)) return 80 + k;
         if (plat_instrument_count() > 1 && inside(x, y, PX + 12, vol_y(2) - 2, PW - 24, 20)) return 82;
         if (plat_can_export() && !S.status[0] && inside(x, y, PX + 16, export_y(), 220, 20)) return 83;
-        if (inside(x, y, PX + 16, PY + PH - 30, 130, 20)) return 32;
-        if (inside(x, y, PX + 156, PY + PH - 30, 150, 20)) return 35;
+        if (inside(x, y, PX + 16, PY + PH - 30, 116, 20)) return 32;
+        if (inside(x, y, PX + 138, PY + PH - 30, 116, 20)) return 35;
+        if (inside(x, y, PX + 260, PY + PH - 30, 116, 20)) return 122;
         if (inside(x, y, PX + PW - 96, PY + PH - 30, 80, 20)) return 33;
+        return 0;
+    }
+    if (S.page == PAGE_MODERN) {
+        for (int i = 0; i < 6; i++)
+            if (i != 3 && inside(x, y, PX + 12, MOD_Y[i], PW - 24, 30)) return 100 + i;
+        for (int k = 0; k < 3; k++) if (inside(x, y, LAY_X[k], MOD_Y[3], 96, 16)) return 110 + k;
+        if (inside(x, y, PX + 16, PY + PH - 30, PW - 128, 22)) return 120;
+        if (inside(x, y, PX + PW - 96, PY + PH - 30, 80, 20)) return 121;
         return 0;
     }
     if (S.page == PAGE_PICTURES) {
@@ -110,6 +131,7 @@ int mm_settings_hit(int x, int y)
 
 /* ---- drawing ---- */
 static void draw_pictures(MMCanvas *c, int hv);
+static void draw_modern(MMCanvas *c, int hv);
 static void button(MMCanvas *c, int x, int y, int w, int h, const char *s, int hv)
 {
     mm_fill(c, x, y, w, h, 0xF2F1EA);
@@ -143,7 +165,7 @@ void mm_settings_draw(MMCanvas *c, int mx, int my)
     int hv = mm_settings_hit(mx, my);
     mm_fill(c, PX - 2, PY - 2, PW + 4, PH + 4, C_TEXT);
     mm_fill(c, PX, PY, PW, 18, C_RED);
-    static const char *const TITLE[3] = {"Settings", "Add a Question", "Pictures: Original, HD and Widescreen"};
+    static const char *const TITLE[4] = {"Settings", "Add a Question", "Pictures: Original, HD and Widescreen", "Modern options"};
     plat_text(c, PX + 6, PY, PW - 30, 18, TITLE[S.page], FONT_BOLD, 0xFFFFFF, TX_LEFT | TX_VCENTER);
     plat_text(c, PX + PW - 20, PY, 18, 18, "X", FONT_BOLD, hv == 1 ? 0xFFFF80 : 0xFFFFFF, TX_CENTER | TX_VCENTER);
     mm_fill(c, PX, PY + 18, PW, PH - 18, C_BG);
@@ -194,11 +216,14 @@ void mm_settings_draw(MMCanvas *c, int mx, int my)
             button(c, PX + 16, export_y(), 220, 20, "Export data for the phone app...", hv == 83);
             plat_text(c, PX + 244, export_y(), PW - 260, 20, "one .zip for the Android app's import", FONT_TEXT, C_GREY, TX_LEFT | TX_VCENTER);
         }
-        button(c, PX + 16, PY + PH - 30, 130, 20, "Add a question...", hv == 32);
-        button(c, PX + 156, PY + PH - 30, 150, 20, "Pictures / HD art...", hv == 35);
+        button(c, PX + 16, PY + PH - 30, 116, 20, "Add a question...", hv == 32);
+        button(c, PX + 138, PY + PH - 30, 116, 20, "Pictures / HD...", hv == 35);
+        button(c, PX + 260, PY + PH - 30, 116, 20, "Modern options...", hv == 122);
         button(c, PX + PW - 96, PY + PH - 30, 80, 20, "Done", hv == 33);
     } else if (S.page == PAGE_PICTURES) {
         draw_pictures(c, hv);
+    } else if (S.page == PAGE_MODERN) {
+        draw_modern(c, hv);
     } else {
         static const char *LABEL[NFIELD] = {"Question (the clue)", "Correct answer", "Wrong answers", NULL, NULL};
         static const int LY[NFIELD] = {PY + 30, PY + 114, PY + 152, 0, 0};
@@ -270,6 +295,49 @@ static void draw_pictures(MMCanvas *c, int hv)
     /* the phone app has no file manager: there the HD pictures come as a zip, a file or a link (CHANGE 2026-11-18) */
     button(c, PX + 224, PY + PH - 30, 150, 20, plat_art_import(0) ? "HD pictures: file or link..." : "Open the art kit folder", hv == 38);
     button(c, PX + PW - 96, PY + PH - 30, 80, 20, "Back", hv == 39);
+}
+
+/* Modern options page (CHANGE 2026-11-21): six switches, grouped; "Classic MindMaze" is a switch that turns them all off (and back) */
+static void mod_row(MMCanvas *c, int i, int on, const char *title, const char *info, int hv)
+{
+    int y = MOD_Y[i], h = hv == 100 + i;
+    checkbox(c, PX + 16, y + 2, on, h);
+    plat_text(c, PX + 36, y, PW - 52, 15, title, FONT_BOLD, h ? C_RED : C_TEXT, TX_LEFT | TX_VCENTER);
+    plat_text(c, PX + 36, y + 15, PW - 52, 15, info, FONT_TEXT, C_GREY, TX_LEFT | TX_ELLIPSIS);
+}
+
+static void draw_modern(MMCanvas *c, int hv)
+{
+    plat_text(c, PX + 16, PY + 28, 300, 16, "Game", FONT_BOLD, C_TEXT, TX_LEFT);
+    mm_fill(c, PX + 16, PY + 44, PW - 32, 1, 0);
+    mod_row(c, 0, mm_opt.resume, "Continue unfinished games",
+            "saved after every turn; the castle gate offers to continue", hv);
+    mod_row(c, 1, mm_opt.hints, "Hints", "50/50 removes wrong answers; then one chance, half the points", hv);
+    mod_row(c, 2, mm_opt.prompts, "Turn prompts and player stats",
+            "\"Your turn\" between players; Stats on the castle-gate page", hv);
+    plat_text(c, PX + 16, PY + 160, 300, 16, "Display", FONT_BOLD, C_TEXT, TX_LEFT);
+    mm_fill(c, PX + 16, PY + 176, PW - 32, 1, 0);
+    int y = MOD_Y[3];
+    plat_text(c, PX + 16, y, 70, 16, "Layout", FONT_BOLD, C_TEXT, TX_LEFT | TX_VCENTER);
+    static const char *const LAY[3] = {"Auto", "Classic", "Touch"};
+    for (int k = 0; k < 3; k++) {
+        int h = hv == 110 + k;
+        mm_disc(c, LAY_X[k] + 7, y + 8, 6, h ? C_RED : C_LINE);
+        mm_disc(c, LAY_X[k] + 7, y + 8, 5, 0xFFFFFF);
+        if (mm_opt.layout == k) mm_disc(c, LAY_X[k] + 7, y + 8, 3, C_TEXT);
+        plat_text(c, LAY_X[k] + 18, y, 78, 16, LAY[k], FONT_TEXT, h ? C_RED : C_TEXT, TX_LEFT | TX_VCENTER);
+    }
+    plat_text(c, PX + 36, y + 17, PW - 52, 30, "Touch: big buttons beside the room, below it on an upright screen. "
+              "Auto: touch on phones and tablets, classic with a mouse.", FONT_TEXT, C_GREY, TX_WRAP);
+    mod_row(c, 4, mm_opt.bigtext, "Large text and high contrast", "bigger question and message text, darker text and lines", hv);
+    mod_row(c, 5, mm_opt.anim, "Animations", "room changes, answers, dialogs and rewards move", hv);
+    {                                                       /* the "Classic MindMaze" switch (user: toggled, all off) */
+        int on = mm_options_classic_on(), h = hv == 120, y = PY + PH - 30;
+        checkbox(c, PX + 16, y + 3, on, h);
+        plat_text(c, PX + 36, y, 130, 22, "Classic MindMaze", FONT_BOLD, h ? C_RED : C_TEXT, TX_LEFT | TX_VCENTER);
+        plat_text(c, PX + 158, y, PW - 270, 22, "all modern options off", FONT_TEXT, C_GREY, TX_LEFT | TX_VCENTER | TX_ELLIPSIS);
+    }
+    button(c, PX + PW - 96, PY + PH - 30, 80, 20, "Back", hv == 121);
 }
 
 /* ---- actions ---- */
@@ -366,6 +434,20 @@ static void click(int id)
     else if (id == 37) plat_open_url(HD_ART_URL);
     else if (id == 38) { if (!plat_art_import(1)) plat_open_data_folder("art"); }
     else if (id == 39) { S.page = PAGE_SOURCES; S.status[0] = 0; }
+    else if (id == 122) { S.page = PAGE_MODERN; S.status[0] = 0; }
+    else if (id >= 100 && id <= 105 && id != 103) {
+        int *o[6] = {&mm_opt.resume, &mm_opt.hints, &mm_opt.prompts, NULL, &mm_opt.bigtext, &mm_opt.anim};
+        *o[id - 100] = !*o[id - 100];
+        mm_options_save();
+    }
+    else if (id >= 110 && id <= 112) { mm_opt.layout = id - 110; mm_options_save(); }
+    else if (id == 120) {
+        mm_options_classic_set(!mm_options_classic_on());
+        snprintf(S.status, sizeof S.status, "%s", mm_options_classic_on() ? "All modern options are off: MindMaze plays and looks like the original."
+                 : "Modern options are back as you had them.");
+        S.err = 0;
+    }
+    else if (id == 121) { S.page = PAGE_SOURCES; S.status[0] = 0; }
     else if (id == 90) {                                     /* cut the agent's results into hd/ and wide/ */
         plat_set_cursor(0);
         char rep[600];

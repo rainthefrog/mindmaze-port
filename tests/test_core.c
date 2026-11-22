@@ -9,7 +9,9 @@
 #include "mm_art.h"
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include "../src/core/mm_game.c"
+#include "text.h"
 
 static const char *g_data;
 static uint32_t g_now = 1000;
@@ -108,15 +110,16 @@ void plat_add_disc(void)
 int plat_art_import(int go) { return 0; }
 void plat_open_data_folder(const char *rel) { snprintf(g_opened, sizeof g_opened, "folder:%s", rel); }
 void plat_set_cursor(int h) {}
-void plat_invalidate(void) {}
+static int g_invalidated;
+void plat_invalidate(void) { g_invalidated++; }
 void plat_view_changed(void) {}
 /* user files kept in memory (seen list, custom / online questions) */
-static struct { char name[64]; char *data; int len; } g_uf[8];
+static struct { char name[64]; char *data; int len; } g_uf[32];   /* user files: seen, custom, stats, savegame, ... */
 static int uf_find(const char *name, int make)
 {
-    for (int i = 0; i < 8; i++) if (g_uf[i].data && !strcmp(g_uf[i].name, name)) return i;
+    for (int i = 0; i < 32; i++) if (g_uf[i].data && !strcmp(g_uf[i].name, name)) return i;
     if (!make) return -1;
-    for (int i = 0; i < 8; i++) if (!g_uf[i].data) { snprintf(g_uf[i].name, 64, "%s", name); g_uf[i].data = calloc(1, 1); g_uf[i].len = 0; return i; }
+    for (int i = 0; i < 32; i++) if (!g_uf[i].data) { snprintf(g_uf[i].name, 64, "%s", name); g_uf[i].data = calloc(1, 1); g_uf[i].len = 0; return i; }
     return -1;
 }
 void *plat_load_user(const char *name, int *size)
@@ -132,6 +135,7 @@ void *plat_load_user(const char *name, int *size)
 int plat_save_user(const char *name, const void *data, int len)
 {
     int i = uf_find(name, 1);
+    if (i < 0) return 0;
     free(g_uf[i].data);
     g_uf[i].data = malloc((size_t)len + 1);
     memcpy(g_uf[i].data, data, (size_t)len);
@@ -141,6 +145,7 @@ int plat_save_user(const char *name, const void *data, int len)
 void plat_append_user(const char *name, const char *text)
 {
     int i = uf_find(name, 1), n = (int)strlen(text);
+    if (i < 0) return;
     g_uf[i].data = realloc(g_uf[i].data, (size_t)(g_uf[i].len + n + 1));
     memcpy(g_uf[i].data + g_uf[i].len, text, (size_t)n);
     g_uf[i].len += n;
@@ -148,10 +153,15 @@ void plat_append_user(const char *name, const char *text)
 void plat_http_get(const char *url, int tag) { (void)url; (void)tag; }
 void plat_quit(void) {}
 MMImage *plat_load_png(const char *rel) { return NULL; }
-int plat_text_px_width(MMCanvas *c, const char *s, int f) { return (int)strlen(s) * 6 * c->scale; }
-int plat_text_px_height(MMCanvas *c, int f) { return 13 * c->scale; }
-int plat_text_px_ascent(MMCanvas *c, int f) { return 11 * c->scale; }
-void plat_text_px(MMCanvas *c, int X, int Y, const char *s, int f, uint32_t rgb, int a, int b, int d, int e) {}
+/* text: stand-in metrics, or the real fonts (text.c, as the web and SDL builds use) with MM_FONTS=<fonts folder> */
+static int g_real_fonts;
+int plat_text_px_width(MMCanvas *c, const char *s, int f) { return g_real_fonts ? text_px_width(c, s, f) : (int)strlen(s) * 6 * c->scale; }
+int plat_text_px_height(MMCanvas *c, int f) { return g_real_fonts ? text_px_height(c, f) : 13 * c->scale; }
+int plat_text_px_ascent(MMCanvas *c, int f) { return g_real_fonts ? text_px_ascent(c, f) : 11 * c->scale; }
+void plat_text_px(MMCanvas *c, int X, int Y, const char *s, int f, uint32_t rgb, int a, int b, int d, int e)
+{
+    if (g_real_fonts) text_px(c, X, Y, s, f, rgb, a, b, d, e);
+}
 
 
 #define CHECK(c, ...) do { if (!(c)) { g_fail++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -165,8 +175,9 @@ static void test_text(void)
         const MMQuestion *q = mm_question_at(a, l, i);
         const char *t[5] = {q->text, q->answer[0], q->answer[1], q->answer[2], q->answer[3]};
         for (int k = 0; k < 5; k++) {
-            const char *amp = strchr(t[k], '&');
-            if (amp && strchr(amp, ';') && strchr(amp, ';') - amp < 9 && amp[1] != ' ') { ents++; if (ents < 4) printf("  entity left: %s\n", t[k]); }
+            const char *amp = strchr(t[k], '&'), *e = amp ? amp + 1 : NULL;   /* (also typos: "Moli&egrave:re", "&mdash.") */
+            while (e && (isalnum((unsigned char)*e) || *e == '#')) e++;
+            if ((amp && e - amp > 2 && e - amp < 10 && (*e == ';' || *e == ':' || *e == '.')) || strstr(t[k], "&z.")) { ents++; if (ents < 4) printf("  entity left: %s\n", t[k]); }
             mm_plain(t[k], plain, sizeof plain);
             if (strchr(plain, '<') || strchr(plain, '>')) { tags++; if (tags < 4) printf("  tag left: %s\n", plain); }
         }
@@ -289,7 +300,8 @@ static void test_questions(void)
     printf("questions: original and json identical (%d)\n", same);
 }
 
-static void set_seed(void) { plat_set_setting("seed", "99"); plat_set_setting("questions", "original"); plat_set_setting("title_seconds", "0"); }
+static void set_seed(void) { plat_set_setting("seed", "99"); plat_set_setting("questions", "original"); plat_set_setting("title_seconds", "0"); plat_set_setting("opt_resume", "0");
+                             plat_set_setting("opt_hints", "0"); plat_set_setting("opt_prompts", "0"); plat_set_setting("opt_anim", "0"); plat_set_setting("opt_layout", "1"); }
 
 /* title screen (CHANGE): shown at start for title_seconds, ends on time, a click or a key; logon underneath */
 static void test_title(void);
@@ -850,9 +862,727 @@ static void test_add_disc(void)
     printf("add disc: ok (50 new of 150)\n");
 }
 
+
+/* CHANGE 2026-11-21: players saved at once (score after every right answer, rank at the stairs, mm_save_players when
+ * the app goes to the background); Settings always on the logon screen and through the gear in the game; the phone
+ * keyboard flag (mm_text_input) */
+static void test_save_settings(void)
+{
+    char err[256], v[256];
+    g_nset = 0;
+    set_seed();
+    CHECK(mm_init(err, sizeof err), "init: %s", err);
+    plat_set_setting("MindmazePlayer1", "100,0,Ann");
+    show_logon();
+
+    /* typing a new name: keyboard wanted; Settings works and keeps the typed name */
+    CHECK(!mm_text_input(), "no typing on the logon screen at first");
+    logon_click(475, 280);                                       /* New player */
+    CHECK(g_lg_edit && mm_text_input(), "new player name: keyboard wanted");
+    mm_char('B'); mm_char('o'); mm_char('b');
+    CHECK(clickable_at(480, 410) == 24, "Settings clickable while typing");
+    logon_click(480, 410);                                       /* Settings... */
+    CHECK(!g_lg_edit && mm_settings_on() && !strcmp(g_lg[0].name, "Bob"), "Settings opens, Bob kept (%s)", g_lg[0].name);
+    CHECK(!mm_text_input(), "settings main page: no keyboard");
+    mm_key(KEY_ESC, 0);
+    CHECK(!mm_settings_on(), "settings closed");
+
+    /* a game with Ann and Bob; Bob is new */
+    for (int i = 0; i < g_nlg; i++) g_lg[i].sel = !strcmp(g_lg[i].name, "Ann") || !strcmp(g_lg[i].name, "Bob");
+    logon_start();
+    mm_key(KEY_ENTER, 0);
+    mm_key(KEY_ENTER, 0);
+    CHECK(g_screen == SCR_ROOM, "in the castle");
+
+    /* gear: opens Settings in a room, not while a question is open */
+    CHECK(clickable_at(GEAR_X + 5, GEAR_Y + 5) == 700, "gear clickable in a room");
+    mm_mouse(GEAR_X + 5, GEAR_Y + 5, MMB_LEFT, MA_DOWN, 0);
+    CHECK(mm_settings_on(), "gear opens Settings in the game");
+    mm_key(KEY_ESC, 0);
+    CHECK(!mm_settings_on() && g_screen == SCR_ROOM, "closed, still in the room");
+
+    Player *p = cur();
+    Room *r = cur_room();
+    int dir = -1;
+    for (int d = 0; d < 4; d++) if (r->doors & (1 << d)) { dir = d; break; }
+    door_click(dir);
+    CHECK(g_qopen && !gear_ok() && clickable_at(GEAR_X + 5, GEAR_Y + 5) != 700, "no gear while a question is open");
+    /* the app to the background (web/Android: MM.suspend -> mm_activate(0)): the clock waits, the music pauses */
+    int s0 = g_q.seconds;
+    mm_activate(0);
+    for (int i = 0; i < 100; i++) { g_now += 100; mm_tick(); }
+    CHECK(g_q.seconds == s0 && (!mm_music_on || g_paused[0] || g_paused[1] || !g_track[1]), "suspended: clock stopped at %d (%d)", s0, g_q.seconds);
+    mm_activate(1);
+    for (int i = 0; i < 25; i++) { g_now += 100; mm_tick(); }
+    CHECK(g_q.seconds < s0, "back: the clock runs again (%d -> %d)", s0, g_q.seconds);
+    int beeps = g_beeps;
+    mm_cmd(CMD_SETTINGS);
+    CHECK(!mm_settings_on() && g_beeps == beeps + 1, "menu Settings refused (beep) during a question");
+
+    /* right answer: saved at once, before any quit */
+    int right = 0;
+    for (int b = 0; b < 4; b++) if (g_q.order[b] == 0) right = b;
+    answer(right);
+    msg_close(1);
+    char want[64];
+    snprintf(want, sizeof want, "%d,%d,%s", p->score, p->award, p->name);
+    snprintf(v, sizeof v, "MindmazePlayer%d", p->saved_n);
+    char got[256] = "";
+    plat_get_setting(v, got, sizeof got);
+    CHECK(p->saved_n && !strcmp(got, want), "score saved right away (%s = %s, want %s)", v, got, want);
+
+    /* the rank at the stairs */
+    g_cur = p->slot;
+    p->score = 2500;
+    p->maze->cx = p->maze->tx;
+    p->maze->cy = p->maze->ty;
+    stairs();
+    msg_close(1);
+    snprintf(want, sizeof want, "2500,%d,%s", p->award, p->name);
+    plat_get_setting(v, got, sizeof got);
+    CHECK(p->award >= 1 && !strcmp(got, want), "rank saved at the stairs (%s, want %s)", got, want);
+
+    /* the app goes to the background: everyone saved, the game goes on */
+    for (int i = 0; i < NPLAYERS; i++) if (g_pl[i]) g_pl[i]->score += 7;
+    mm_save_players();
+    int ok = 1;
+    for (int i = 0; i < NPLAYERS; i++) {
+        if (!g_pl[i]) continue;
+        snprintf(v, sizeof v, "MindmazePlayer%d", g_pl[i]->saved_n);
+        snprintf(want, sizeof want, "%d,%d,%s", g_pl[i]->score, g_pl[i]->award, g_pl[i]->name);
+        if (!plat_get_setting(v, got, sizeof got) || strcmp(got, want)) ok = 0;
+    }
+    CHECK(ok && g_screen == SCR_ROOM && g_pl[0], "mm_save_players saves all and the game goes on");
+    printf("saving, settings everywhere, keyboard flag: ok\n");
+}
+
+
+/* Modern options (CHANGE 2026-11-21): views, the touch column, hints, stats, turn prompts, continue a game,
+ * animations, the options page, drawing every layout */
+static MMCanvas view_canvas(int scale)
+{
+    MMCanvas c = {0};
+    c.scale = scale;
+    c.w = mm_view_w() * scale;
+    c.h = mm_view_h() * scale;
+    c.stride = c.w;
+    c.ox = mm_view_ox();
+    c.px = calloc((size_t)c.w * c.h, sizeof(uint32_t));
+    return c;
+}
+static void draw_all_views(const char *what)
+{
+    static const int SCR[3][3] = {{1280, 720, 0}, {844, 390, 1}, {390, 844, 1}};
+    for (int v = 0; v < 3; v++) {
+        mm_set_screen(SCR[v][0], SCR[v][1], SCR[v][2]);
+        for (int s = 1; s <= 2; s++) {
+            MMCanvas c = view_canvas(s);
+            mm_draw(&c);
+            if (v) {                                        /* the column is drawn (panel colour, not black) */
+                int cx, cy, z;
+                col_place(&cx, &cy, &z);
+                uint32_t px = c.px[(size_t)((cy + 2 * z) * s) * c.stride + (size_t)((cx + 150 * z) * s)];
+                CHECK(px != 0 || g_title_on, "%s: column drawn in view %d at scale %d", what, v, s);
+            }
+            free(c.px);
+        }
+    }
+}
+static void tap_view(int x, int y) { mm_mouse(x, y, MMB_LEFT, MA_DOWN, 0); mm_mouse(x, y, MMB_LEFT, MA_UP, 0); }
+static void tap_col(int x, int y) { int cx, cy, z; col_place(&cx, &cy, &z); tap_view(cx + x * z, cy + y * z); }
+
+static void test_modern(void)
+{
+    char err[256], v[256];
+    g_nset = 0;
+    set_seed();
+    static const char *const ON[] = {"opt_resume", "opt_hints", "opt_prompts", "opt_anim"};
+    for (int i = 0; i < 4; i++) plat_set_setting(ON[i], "1");
+    plat_set_setting("opt_layout", "0");
+    plat_set_setting("MindmazePlayer1", "100,0,Ann");
+    plat_set_setting("MindmazePlayer2", "0,0,Bob");
+    for (int i = 0; i < 32; i++) { free(g_uf[i].data); g_uf[i].data = NULL; }
+    CHECK(mm_init(err, sizeof err), "init: %s", err);
+    CHECK(mm_opt.resume && mm_opt.hints && mm_opt.prompts && mm_opt.layout == MM_LAYOUT_AUTO && !mm_opt.bigtext && mm_opt.anim,
+          "defaults: all on, layout auto, large text off");
+    mm_set_screen(1280, 720, 0);
+    CHECK(mm_view() == MM_VIEW_CLASSIC && mm_view_w() == MM_W + 2 * mm_view_ext() && mm_view_h() == MM_H, "mouse: classic view");
+    mm_set_screen(844, 390, 1);
+    CHECK(mm_view() == MM_VIEW_TOUCH_WIDE && mm_view_w() == 936 && mm_view_h() == 437 && mm_view_ox() == 0, "touch, landscape: 936x437");
+    mm_set_screen(390, 844, 1);
+    CHECK(mm_view() == MM_VIEW_TOUCH_WIDE && mm_view_w() == 936 && mm_view_h() == 437, "touch, portrait: the landscape layout (portrait not supported, %d x %d)", mm_view_w(), mm_view_h());
+    draw_all_views("logon");
+
+    /* the castle gate in the column (touch): select both, enter */
+    mm_set_screen(844, 390, 1);
+    int ia = -1, ib = -1;
+    for (int i = 0; i < g_nlg; i++) { if (!strcmp(g_lg[i].name, "Ann")) ia = i; if (!strcmp(g_lg[i].name, "Bob")) ib = i; }
+    tap_col(20, CLROW_Y + ia * CLROW_H + 5);                    /* 1 player: a tap picks that name only */
+    tap_col(20, CLROW_Y + ib * CLROW_H + 5);
+    CHECK(!g_lg[ia].sel && g_lg[ib].sel, "1 player: the last tapped name only");
+    tap_col(160, 40);                                          /* Several players */
+    tap_col(20, CLROW_Y + ia * CLROW_H + 5);
+    CHECK(g_lg_mp && g_lg[ia].sel && g_lg[ib].sel, "several players: both chosen");
+    draw_all_views("multiplayer gate");
+    mm_set_screen(844, 390, 1);
+    tap_view(314, 129);                                        /* the castle door starts the game */
+    CHECK(g_screen == SCR_GRATING && anim_on(AN_SCREEN), "castle door: in, with the walk-in (screen %d)", g_screen);
+    tap_view(300, 150);
+    tap_view(60, 150);
+    CHECK(g_screen == SCR_ROOM, "into the castle by taps");
+    mm_set_screen(844, 390, 1);                                 /* landscape from here */
+    Player *a = cur();
+    CHECK(a && clickable_at(636 + 150, 55) == 820 && clickable_at(636 + 20, CA_Y + 5) == 0, "column: Topic button, map below");
+    tap_col(150, 55);                                          /* Topic: ... opens the picker */
+    CHECK(g_col_areas && clickable_at(636 + 20, CA_Y + 3 * (CA_H + 2) + 5) == 813, "area picker open");
+    draw_all_views("area picker");
+    mm_set_screen(844, 390, 1);
+    tap_col(20, CA_Y + 3 * (CA_H + 2) + 5);
+    tap_col(84 + 2 * 53 + 10, CL_Y + 10);
+    CHECK(a->areabtn == 3 && a->level == 2 && !g_col_areas, "column: area (picker closed) and level (%d %d)", a->areabtn, a->level);
+    a->areabtn = 0;
+    draw_all_views("room");
+    mm_set_screen(844, 390, 1);
+
+    /* question: hint, right answer, stats, turn prompt */
+    Room *r = cur_room();
+    int dir = -1;
+    for (int d = 0; d < 4; d++) if (r->doors & (1 << d)) { dir = d; break; }
+    door_click(dir);
+    CHECK(g_qopen, "question open");
+    CHECK(g_an[AN_POPUP].on && g_an[AN_ANSWERS].on, "the question pops up (animation)");
+    draw_all_views("question");
+    mm_set_screen(844, 390, 1);
+    int full = q_points();
+    tap_col(20, CB_Y + 5);                                     /* 50/50 */
+    int off = 0;
+    for (int b = 0; b < 4; b++) off += g_q.disabled[b] && g_q.order[b] != 0;
+    CHECK(g_q.hint && off == 2 && q_points() == full / 2, "50/50: two wrong answers gone, half the points (%d of %d)", q_points(), full);
+    int right = 0;
+    for (int b = 0; b < 4; b++) if (g_q.order[b] == 0) right = b;
+    int before = a->score, pts = q_points();
+    tap_col(100, CANS_Y + right * (CANS_H + 4) + 10);
+    CHECK(g_nmsg == 1 && mm_animating(), "right answer: message, feedback animation");
+    draw_all_views("feedback");
+    mm_set_screen(844, 390, 1);
+    msg_close(1);
+    CHECK(a->score == before + pts, "points added (%d)", a->score);
+    CHECK(g_nmsg == 1 && strstr(g_msg[0].text, "your turn") && strstr(g_msg[0].text, cur()->name), "turn prompt: %s",
+          g_nmsg ? g_msg[0].text : "-");
+    msg_close(1);
+    int si = uf_find("stats.txt", 0);
+    CHECK(si >= 0 && strstr(g_uf[si].data, "Ann\t1 1 0 0 1 1 0"), "stats recorded: %s", si >= 0 ? g_uf[si].data : "-");
+
+    /* the hint after a wrong try: one more answer goes, and only one chance is left (user 2026-11-21) */
+    r = cur_room();
+    for (int d = 0; d < 4; d++) if ((r->doors & (1 << d)) && !(r->opened & (1 << d))) dir = d;
+    door_click(dir);
+    int w1 = -1, okb = -1;
+    for (int b = 0; b < 4; b++) { if (g_q.order[b] == 0) okb = b; else if (w1 < 0) w1 = b; }
+    answer(w1);
+    msg_close(1);
+    hint_5050();
+    int open = 0;
+    for (int b = 0; b < 4; b++) open += !g_q.disabled[b];
+    CHECK(g_qopen && g_q.hint && open == 2 && !g_q.disabled[okb], "hint after a wrong try removes one (%d open)", open);
+    int w2 = -1;
+    for (int b = 0; b < 4; b++) if (!g_q.disabled[b] && b != okb) w2 = b;
+    answer(w2);
+    CHECK(g_nmsg == 1 && strstr(g_msg[0].text, "correct answer is"), "after the hint a wrong answer ends the question: %s",
+          g_nmsg ? g_msg[0].text : "-");
+    while (g_nmsg) msg_close(1);
+
+    /* continue the game after a restart */
+    int sg = uf_find("savegame.txt", 0);
+    CHECK(sg >= 0 && g_uf[sg].len > 100, "game saved after the turn");
+    int cx0 = a->maze->cx, cy0 = a->maze->cy, sc0 = a->score, cur0 = g_cur;
+    show_logon();                                              /* (a restart shows the gate) */
+    CHECK(g_nmsg == 0 && strstr(g_resume_names, "Ann") && strstr(g_resume_names, "Bob") &&
+          clickable_at(636 + 150, CLROW_Y + 7 * CLROW_H + 20) == 979, "touch: the gate offers Continue (%s)", g_resume_names);
+    tap_col(150, CLROW_Y + 7 * CLROW_H + 20);
+    Player *a2 = NULL;
+    for (int i = 0; i < NPLAYERS; i++) if (g_pl[i] && !strcmp(g_pl[i]->name, "Ann")) a2 = g_pl[i];
+    CHECK(g_screen == SCR_ROOM && a2 && a2->maze->cx == cx0 && a2->maze->cy == cy0 && a2->score == sc0 && g_cur == cur0,
+          "game continued in the same room with the same score");
+    CHECK(a2 && room_at(a2->maze, cx0, cy0)->opened, "the opened door is still open");
+    tap_col(20, CB_Y + 5);                                     /* Main Menu: back to the gate, the game kept */
+    CHECK(g_screen == SCR_LOGON && g_nmsg == 0 && g_uf[sg].len > 100 && g_resume_names[0], "Main Menu: castle gate, game kept");
+    tap_col(150, CLROW_Y + 7 * CLROW_H + 20);
+    CHECK(g_screen == SCR_ROOM, "continued after Main Menu");
+    mm_set_screen(1280, 720, 0);                               /* classic: the question at the start */
+    show_logon();
+    CHECK(g_nmsg == 1 && g_msg[0].yesno && strstr(g_msg[0].text, "Ann"), "classic: continue offered at the start");
+    msg_close(1);
+    CHECK(g_screen == SCR_ROOM, "classic: continued");
+    mm_set_screen(844, 390, 1);
+    mm_cmd(CMD_NEW_GAME);
+    CHECK(g_screen == SCR_LOGON && g_nmsg == 0 && g_uf[sg].len == 0, "New Game drops the saved game, no offer");
+
+    /* animations: on -> something moves after a step; off -> never */
+    for (int i = 0; i < g_nlg; i++) g_lg[i].sel = !strcmp(g_lg[i].name, "Ann");
+    logon_start();
+    enter_castle();
+    g_now += 5000;
+    mm_tick();
+    r = cur_room();
+    for (int d = 0; d < 4; d++) if (r->doors & (1 << d)) dir = d;
+    r->opened |= 1 << dir;
+    door_click(dir);
+    CHECK(mm_animating(), "animation after walking through a door");
+    g_now += 2000;
+    mm_tick();
+    while (g_nmsg) msg_close(1);
+    g_now += 3000;
+    mm_tick();
+    CHECK(!mm_animating(), "animations end");
+
+    /* Settings > Modern options > Classic MindMaze: all off, classic view even on a touch screen */
+    settings_now();
+    mm_settings_mouse(343 + 5, 22 + 392 - 25, MMB_LEFT, MA_DOWN);   /* "Modern options..." */
+    draw_all_views("options page");
+    mm_set_screen(844, 390, 1);
+    MMOptions opt_was = mm_opt;
+    mm_settings_mouse(78 + 30, 22 + 392 - 25, MMB_LEFT, MA_DOWN);   /* "Classic MindMaze (all off)" */
+    CHECK(!mm_opt.resume && !mm_opt.hints && !mm_opt.prompts && !mm_opt.anim && !mm_opt.bigtext && mm_opt.layout == MM_LAYOUT_CLASSIC_ONLY
+          && mm_view() == MM_VIEW_CLASSIC, "Classic MindMaze: everything off, classic view");
+    plat_get_setting("opt_layout", v, sizeof v);
+    CHECK(!strcmp(v, "1"), "options saved (%s)", v);
+    mm_settings_mouse(78 + 30, 22 + 392 - 25, MMB_LEFT, MA_DOWN);   /* the switch again: the choices come back */
+    CHECK(!memcmp(&mm_opt, &opt_was, sizeof opt_was) && !mm_options_classic_on(), "Classic MindMaze off: the modern options as they were");
+    mm_settings_mouse(78 + 30, 22 + 392 - 25, MMB_LEFT, MA_DOWN);   /* (and on again for the rest) */
+    CHECK(mm_options_classic_on(), "Classic MindMaze on again");
+    mm_key(KEY_ESC, 0);
+    r = cur_room();
+    for (int d = 0; d < 4; d++) if (r->doors & (1 << d)) dir = d;
+    r->opened |= 1 << dir;
+    door_click(dir);
+    CHECK(!mm_animating(), "animations off: nothing moves");
+    mm_opt.bigtext = 1;
+    mm_opt.layout = MM_LAYOUT_AUTO;
+    draw_all_views("large text");
+    mm_opt.bigtext = 0;
+    mm_set_screen(1280, 720, 0);
+    printf("modern options: ok\n");
+}
+
+
+/* Overlay check of the tap areas (2026-11-21, user: "some are offset on purpose but some look like accidents"): every
+ * object that can be tapped - furniture with a click rect, characters, doors - drawn on grey with
+ * red = the tap area the game uses (hot_object: the original tables), green = the box of the picture's visible
+ * pixels, yellow = where the glint runs (glint_area). Sheet: <data>/../build/overlay/sheet.png (3 per row, 636 x 301
+ * each), report lines "overlay ..." with how much of the tap area is picture and how much of the picture is
+ * tappable. Real data only (make test-data). */
+static void test_overlay(void)
+{
+    char err[256];
+    set_seed();
+    if (!mm_init(err, sizeof err)) return;
+    struct { int group, n, mode; const char *kind; } G[3] = {{MM_G_FURNITURE, MM_N_FURNITURE, 0, "furniture"},
+                                                              {MM_G_CHARACTERS, MM_N_CHARACTERS, 1, "character"},
+                                                              {MM_G_DOORS, 5, 1, "door"}};
+    int total = 0;
+    for (int g = 0; g < 3; g++) total += G[g].n;
+    int cols = 3, rows = (total + cols - 1) / cols, W = 636, H = 301;
+    MMCanvas c = {0};
+    c.scale = 1;
+    c.w = W;
+    c.h = H;
+    c.stride = W;
+    c.px = calloc((size_t)W * H, sizeof(uint32_t));
+    AImg *sheet = aimg_new(W * cols, H * rows, 3);
+    int k = 0;
+    for (int g = 0; g < 3; g++)
+        for (int i = 0; i < G[g].n; i++, k++) {
+            const MMObject *o = obj(G[g].group, i);
+            mm_fill(&c, 0, 0, W, H, 0x505050);
+            mm_draw_img(&c, o->name, o->x, o->y);
+            g_nhot = 0;
+            hot_object(o, G[g].mode);
+            MMImage *im = mm_image(o->name);
+            int bx0 = 9999, by0 = 9999, bx1 = -1, by1 = -1, opq = 0, inhot = 0, hotpx = 0, hotopq = 0;
+            int w = im ? im->w : 0;                              /* (the 2006 pictures are drawn whole, half or not) */
+            for (int y = 0; im && y < im->h; y++)
+                for (int x = 0; x < w; x++)
+                    if ((im->px[y * im->w + x] >> 24) > 128) {
+                        int X = o->x + x, Y = o->y + y;
+                        opq++;
+                        if (X < bx0) bx0 = X;
+                        if (X > bx1) bx1 = X;
+                        if (Y < by0) by0 = Y;
+                        if (Y > by1) by1 = Y;
+                        if (g_nhot && inside(X, Y, g_hot[0].x, g_hot[0].y, g_hot[0].w, g_hot[0].h)) inhot++;
+                    }
+            if (g_nhot) {
+                Hot *hh = &g_hot[0];
+                for (int y = hh->y; y < hh->y + hh->h; y++)
+                    for (int x = hh->x; x < hh->x + hh->w; x++) {
+                        hotpx++;
+                        int lx = x - o->x, ly = y - o->y;
+                        if (im && lx >= 0 && ly >= 0 && lx < w && ly < im->h && (im->px[ly * im->w + lx] >> 24) > 128) hotopq++;
+                    }
+                obj_glint(&c, &g_hot[0], 0.5);                     /* the glint, halfway */
+                mm_frame(&c, hh->x, hh->y, hh->w, hh->h, 2, 0xFF2020);
+            }
+            if (bx1 >= 0) mm_frame(&c, bx0, by0, bx1 - bx0 + 1, by1 - by0 + 1, 1, 0x20FF20);
+            if (g_nhot) {
+                Hot *hh = &g_hot[0];
+                int ol = bx0 - hh->x, ot = by0 - hh->y, orr = hh->x + hh->w - 1 - bx1, ob = hh->y + hh->h - 1 - by1;
+                printf("overlay %-9s %2d %-13s pic %3d,%3d %3dx%3d  tap %3d,%3d %3dx%3d  past the picture: left %3d top %3d right %3d"
+                       " bottom %3d  tap on picture %3d%%  picture tappable %3d%%\n", G[g].kind, i, o->name, bx0, by0, bx1 - bx0 + 1,
+                       by1 - by0 + 1, hh->x, hh->y, hh->w, hh->h, ol > 0 ? ol : 0, ot > 0 ? ot : 0, orr > 0 ? orr : 0, ob > 0 ? ob : 0,
+                       hotpx ? hotopq * 100 / hotpx : 0, opq ? inhot * 100 / opq : 0);
+            }
+            int sx = (k % cols) * W, sy = (k / cols) * H;
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    uint32_t v = c.px[y * W + x];
+                    unsigned char *d = sheet->p + ((size_t)(sy + y) * sheet->w + sx + x) * 3;
+                    d[0] = v >> 16 & 255; d[1] = v >> 8 & 255; d[2] = v & 255;
+                }
+        }
+    aimg_save_png("../build/overlay/sheet.png", sheet);
+    aimg_free(sheet);
+    free(c.px);
+    printf("overlay: build/overlay/sheet.png (%d objects)\n", total);
+}
+
+
+/* pop-up pages (CHANGE 2026-11-21, user: the typewriter cut off the end; Next / Previous for a larger font; the size is
+ * fixed before typing): every speech and question, in each layout, shown page by page has every letter on some page;
+ * the typewriter's partial pages keep the final layout; Previous / Next and taps turn the pages. */
+static void canvas_png(const MMCanvas *c, const char *path)     /* (MM_SHOT=<folder>: pictures to look at by eye) */
+{
+    AImg *a = aimg_new(c->w, c->h, 3);
+    for (int i = 0; i < c->w * c->h; i++) {
+        uint32_t v = c->px[(i / c->w) * c->stride + i % c->w];
+        a->p[i * 3] = v >> 16 & 255; a->p[i * 3 + 1] = v >> 8 & 255; a->p[i * 3 + 2] = v & 255;
+    }
+    aimg_save_png(path, a);
+    aimg_free(a);
+}
+static void shot(const MMCanvas *c, const char *name)
+{
+    char p[512];
+    if (!getenv("MM_SHOT")) return;
+    snprintf(p, sizeof p, "%s/%s.png", getenv("MM_SHOT"), name);
+    canvas_png(c, p);
+    printf("shot: %s\n", p);
+}
+
+/* the mute button (CHANGE 2026-11-21, user): top left, every screen, both layouts; saved; volumes kept */
+static void test_mute(void)
+{
+    char err[256], v[16];
+    set_seed();
+    if (!mm_init(err, sizeof err)) return;
+    mm_set_volume(70, 40);
+    for (int touch = 0; touch < 2; touch++) {
+        mm_set_screen(touch ? 844 : 1280, touch ? 390 : 720, touch);
+        show_logon();
+        CHECK(!g_mute && clickable_at(MUTE_X + 5, MUTE_Y + 5) != 0, "mute (%s): clickable on the gate", touch ? "touch" : "classic");
+        tap_view(MUTE_X + 5, MUTE_Y + 5);
+        CHECK(g_mute && plat_get_setting("Muted", v, sizeof v) && !strcmp(v, "1") && mm_music_volume == 70 && mm_sound_volume == 40,
+              "mute: on, saved, volume levels kept");
+        g_lg[0].sel = 1;
+        logon_start();
+        for (int i = 0; i < 4 && g_screen != SCR_ROOM; i++) { if (g_nmsg) msg_close(1); else mm_key(KEY_ENTER, 0); }
+        int scr = g_screen, q = g_qopen, sp = g_speech;
+        tap_view(MUTE_X + 5, MUTE_Y + 5);
+        CHECK(!g_mute && g_screen == scr && g_qopen == q && g_speech == sp, "mute: off again in the room, nothing else tapped");
+        MMCanvas c = view_canvas(1);
+        mm_draw(&c);
+        free(c.px);
+        mm_cmd(CMD_QUIT);
+        if (g_nmsg) msg_close(1);
+    }
+    set_seed();
+    printf("mute: ok\n");
+}
+
+/* glint coverage (CHANGE 2026-11-21, user: "the soldier ... does half the object"): in the rooms of 8 mazes, every
+ * tappable object's glint is swept from start to end; it must light its whole visible picture (the pixels not covered
+ * by an object drawn in front). Real data only. */
+static void test_glint_cover(void)
+{
+    char err[256];
+    set_seed();
+    if (!mm_init(err, sizeof err)) return;
+    int objs = 0, low = 0;
+    MMCanvas c = {0};
+    c.scale = 1; c.w = MM_W; c.h = MM_H; c.stride = MM_W;
+    c.px = calloc((size_t)MM_W * MM_H, sizeof(uint32_t));
+    for (unsigned seed = 1; seed <= 8; seed++) {
+        mm_srand(seed);
+        Maze *m = maze_new();
+        for (int i = 0; i < 100; i++) {
+            Room *r = m->grid[i];
+            if (!r || (r->doors & 0x10)) continue;
+            room_hots(r);
+            for (int h = 0; h < g_nhot; h++) {
+                const MMObject *o = g_hot[h].o;
+                MMImage *im = o ? mm_image(o->name) : NULL;
+                if (!im) continue;
+                memset(c.px, 0, (size_t)MM_W * MM_H * sizeof(uint32_t));
+                for (double t = 0.02; t < 1; t += 0.02) obj_glint(&c, &g_hot[h], t);   /* (band 32 px, steps < 16 px) */
+                long all = 0, lit = 0;
+                Front fr[160];
+                int nf = fronts_of(o, fr);
+                for (int y = 0; y < im->h; y++)
+                    for (int x = 0; x < im->w; x++) {
+                        int X = o->x + x, Y = o->y + y;
+                        if ((im->px[y * im->w + x] >> 24) <= 128 || X < 0 || Y < 0 || X >= MM_W || Y >= MM_H || covered_by(fr, nf, X, Y)) continue;
+                        all++;
+                        lit += c.px[Y * MM_W + X] != 0;
+                    }
+                objs++;
+                if (all && lit * 100 / all < 90 && low++ < 5) printf("  glint lights %ld of %ld pixels of %s\n", lit, all, o->name);
+            }
+        }
+        maze_free(m);
+    }
+    free(c.px);
+    CHECK(low == 0, "glint: every tappable object lit over its whole visible picture (%d of %d below 90%%)", low, objs);
+    printf("glint: %d objects in rooms, %d lit less than 90%%\n", objs, low);
+}
+static int letters(const char *t)
+{
+    char p[4096];
+    mm_plain(t, p, sizeof p);
+    int n = 0;
+    for (const char *s = p; *s; s++) n += (*s & 0xC0) != 0x80 && *s != ' ' && *s != '\n';
+    return n;
+}
+extern int mm_rich_overflow;
+static void test_pages(void)
+{
+    char err[256];
+    set_seed();
+    if (!mm_init(err, sizeof err)) return;
+    static const int SCR[3][3] = {{1280, 720, 0}, {1280, 720, 0}, {844, 390, 1}};
+    int bad = 0, maxpages = 0, texts = 0, paged = 0;
+    for (int v = 0; v < 3; v++) {
+        mm_opt.bigtext = v == 1;
+        mm_set_screen(SCR[v][0], SCR[v][1], SCR[v][2]);
+        MMCanvas c = view_canvas(2);
+        for (int mode = 0; mode < 2; mode++)
+            for (int k = 0; k < (mode ? 10 * 4 : MM_N_SPEECH); k++) {
+                int nt = mode ? mm_question_count(k / 4, k % 4) : mm_speech_count[k];
+                if (mode && nt > 60) nt = 60;
+                for (int i = 0; i < nt; i++) {
+                    const char *t = mode ? mm_question_at(k / 4, k % 4, i)->text : mm_speech[k][i];
+                    char buf[2048];
+                    if (!mode) {                            /* (as show_speech: a literal \n is a line break) */
+                        char *o = buf;
+                        for (; *t && o < buf + sizeof buf - 1; t++) { if (t[0] == '\\' && t[1] == 'n') { *o++ = '\n'; t++; } else *o++ = *t; }
+                        *o = 0;
+                        t = buf;
+                    }
+                    ov_reset();
+                    int sum = 0;
+                    draw_overlay(&c, mode, t);
+                    int pages = g_ov_pages;
+                    int ov0 = mm_rich_overflow;
+                    for (g_ov_page = 0; g_ov_page < pages; g_ov_page++) sum += draw_overlay(&c, mode, t);
+                    if (mm_rich_overflow > ov0) printf("  past the edge (view %d mode %d): %.120s\n", v, mode, t);
+                    texts++;
+                    if (pages > 1) paged++;
+                    if (pages > maxpages) maxpages = pages;
+                    if (sum != letters(t) && bad++ < 3) printf("  letters lost (view %d mode %d: %d of %d): %.60s\n", v, mode, sum, letters(t), t);
+                }
+            }
+        free(c.px);
+    }
+    mm_opt.bigtext = 0;
+    CHECK(!mm_rich_overflow, "pop-ups: %d words past the right edge of the box", mm_rich_overflow);
+    CHECK(!bad, "pop-ups: every letter of %d texts on a page (%d paged, at most %d pages)", texts, paged, maxpages);
+    printf("pop-ups: %d texts, %d on more than one page, at most %d pages\n", texts, paged, maxpages);
+
+    /* a long speech in the touch layout: pages, lines fading in page by page, Next / Previous / Close / tap */
+    mm_set_screen(844, 390, 1);
+    plat_set_setting("MindmazePlayer1", "0,0,Ann");
+    show_logon();
+    g_lg[0].sel = 1;
+    logon_start();
+    for (int i = 0; i < 4 && g_screen != SCR_ROOM; i++) { if (g_nmsg) msg_close(1); else mm_key(KEY_ENTER, 0); }
+    CHECK(g_screen == SCR_ROOM, "pages: in a room (screen %d, title %d, msg %d, pl %p, nlg %d)", g_screen, g_title_on, g_nmsg, (void *)g_pl[0], g_nlg);
+    mm_opt.anim = 1;
+    char *o = g_speech_text;
+    for (int i = 0; i < 40; i++) o += sprintf(o, "Word%d is here. ", i);
+    g_speech = 1;
+    g_qopen = 0;
+    ov_reset();
+    type_start(1);
+    MMCanvas c1 = view_canvas(1);
+    mm_draw(&c1);
+    g_type_done = 1;
+    MMCanvas c2 = view_canvas(2);
+    g_an[AN_SHIMMER].on = 1; g_an[AN_SHIMMER].t0 = plat_ticks() - 900; g_an[AN_SHIMMER].dur = 6000;
+    mm_draw(&c2);
+    shot(&c2, "pages-touch");
+    g_an[AN_SHIMMER].on = 0;
+    g_speech = 0;
+    mm_draw(&c2);
+    g_an[AN_SHIMMER].on = 1; g_an[AN_SHIMMER].t0 = plat_ticks() - 1200;
+    mm_draw(&c2);
+    shot(&c2, "room-glint");
+    if (getenv("MM_SHOT")) {                                /* rooms with their tap areas (red) and the glints halfway */
+        Maze *m = cur()->maze;
+        int ox = m->cx, oy = m->cy, k = 0;
+        for (int i = 0; i < 100 && k < 8; i++) {
+            Room *r = m->grid[i];
+            if (!r || (r->doors & 0x10)) continue;
+            m->cx = i % 10; m->cy = i / 10;
+            g_an[AN_SHIMMER].on = 1; g_an[AN_SHIMMER].t0 = plat_ticks() - 1500;
+            mm_draw(&c2);
+            for (int h = 0; h < g_nhot; h++) mm_frame(&c2, g_hot[h].x, g_hot[h].y, g_hot[h].w, g_hot[h].h, 1, 0xFF2020);
+            char nm[32];
+            snprintf(nm, sizeof nm, "room-%d", k++);
+            shot(&c2, nm);
+        }
+        m->cx = ox; m->cy = oy;
+        g_an[AN_SHIMMER].on = 0;
+    }
+    g_an[AN_SHIMMER].on = 0;
+    free(c2.px);
+    g_speech = 1;
+    type_start(1);
+    mm_draw(&c1);
+    CHECK(g_ov_pages > 1 && g_ov_btn_on, "long speech: %d pages with Previous / Next", g_ov_pages);
+    CHECK(typing() && g_ov_lines > 1 && g_ov_lines < 64, "the first page's lines fade in (%d lines)", g_ov_lines);
+    {                                                       /* line by line, top first */
+        uint32_t t0 = g_now;
+        g_now = g_type_t0 + LINE_DELAY + LINE_FADE;
+        CHECK(line_alpha(0) == 1 && line_alpha(1) < 1 && line_alpha(g_ov_lines - 1) == 0, "the top line first, the others after it");
+        g_now += 60000;                                     /* fading ends between frames: one more frame is asked for */
+        g_invalidated = 0;
+        int anim = mm_animating();
+        CHECK(!anim && g_invalidated > 0, "lines done: a last redraw with the whole page");
+        g_now = t0;
+        type_start(1);
+        mm_draw(&c1);
+    }
+    tap_view(g_ov_btn[1][0] + 5, g_ov_btn[1][1] + 5);      /* Next while lines appear: all of them, same page */
+    CHECK(!typing() && g_ov_page == 0 && g_speech, "Next while the lines appear: the page shown whole, no page turn");
+    tap_view(g_ov_btn[1][0] + 5, g_ov_btn[1][1] + 5);      /* then Next turns the page */
+    CHECK(g_ov_page == 1 && typing(), "Next: the next page, its lines fade in");
+    tap_view(300, 100);                                     /* a tap elsewhere: all of the page */
+    CHECK(!typing() && g_ov_page == 1, "tap: the page shown whole");
+    mm_draw(&c1);
+    tap_view(g_ov_btn[0][0] + 5, g_ov_btn[0][1] + 5);      /* Previous */
+    CHECK(g_ov_page == 0 && g_speech, "Previous: back a page");
+    g_type_done = 1;
+    for (int i = 0; i < 20 && g_speech; i++) mm_key(KEY_ENTER, 0);
+    CHECK(!g_speech, "Enter: through the pages, then the speech closes");
+    g_speech = 1; g_qopen = 0; ov_reset(); g_type_done = 1;  /* Close on the last page (user: Next turns into Close) */
+    mm_draw(&c1);
+    g_ov_page = g_ov_pages - 1;
+    mm_draw(&c1);
+    tap_view(g_ov_btn[1][0] + 5, g_ov_btn[1][1] + 5);
+    CHECK(!g_speech, "Close on the last page closes the speech");
+    snprintf(g_speech_text, sizeof g_speech_text, "Short words.");   /* a one-page speech: Close too (user) */
+    g_speech = 1; ov_reset(); type_start(1);
+    mm_draw(&c1);
+    CHECK(g_ov_pages == 1 && g_ov_btn_on, "one-page speech: buttons shown");
+    tap_view(g_ov_btn[1][0] + 5, g_ov_btn[1][1] + 5);      /* (lines still appearing: all of them first) */
+    CHECK(g_speech && !typing(), "one-page speech: Close while the lines appear shows them first");
+    tap_view(g_ov_btn[1][0] + 5, g_ov_btn[1][1] + 5);
+    CHECK(!g_speech, "one-page speech: Close closes it");
+    free(c1.px);
+    set_seed();
+    printf("pop-up pages: ok\n");
+}
+
+/* room overlap check (CHANGE 2026-11-21, user: paintings must not overlap other objects; tap areas fitted to their
+ * picture where nothing overlaps): over the rooms of many mazes, the visible pixels of each drawn object (doors,
+ * furniture, the character) are compared. Real data only. */
+static int vis(const MMObject *o, int X, int Y)                /* the object's picture is solid at screen X, Y */
+{
+    MMImage *im = mm_image(o->name);
+    int x = X - o->x, y = Y - o->y;
+    return im && x >= 0 && y >= 0 && x < im->w && y < im->h && (im->px[y * im->w + x] >> 24) > 128;
+}
+static void test_room_overlap(void)
+{
+    char err[256];
+    set_seed();
+    if (!mm_init(err, sizeof err)) return;
+    static int pair[256][256];
+    memset(pair, 0, sizeof pair);
+    static int other[256][256];
+    memset(other, 0, sizeof other);
+    int rooms = 0, painted = 0, bad_rooms = 0, taps = 0, full = 0;
+    double cover = 0;
+    for (unsigned seed = 1; seed <= 300; seed++) {
+        mm_srand(seed);
+        Maze *m = maze_new();
+        for (int i = 0; i < 100; i++) {
+            Room *r = m->grid[i];
+            if (!r || (r->doors & 0x10)) continue;
+            rooms++;
+            const MMObject *L[80];
+            int n = 0;
+            for (int d = 0; d < 5; d++) if (r->doors & (1 << d)) L[n++] = obj(MM_G_DOORS, d);
+            for (int f = 0; f < MM_N_FURNITURE; f++) if ((r->furnA | r->furnB) >> f & 1) L[n++] = obj(MM_G_FURNITURE, f);
+            if (r->chr != NONE) L[n++] = obj(MM_G_CHARACTERS, r->chr);
+            int any = 0, bad = 0;
+            for (int a = 0; a < n; a++) {
+                if (strncmp(L[a]->name, "PIC", 3)) continue;
+                any = 1;
+                MMImage *im = mm_image(L[a]->name);
+                for (int b = 0; b < n && im; b++) {
+                    if (b == a) continue;
+                    int px = 0;
+                    for (int y = 0; y < im->h; y++)
+                        for (int x = 0; x < im->w; x++)
+                            if (vis(L[a], L[a]->x + x, L[a]->y + y) && vis(L[b], L[a]->x + x, L[a]->y + y)) px++;
+                    if (px) { pair[L[a] - mm_objects][L[b] - mm_objects]++; bad = 1; }
+                }
+            }
+            painted += any;
+            bad_rooms += bad;
+            for (int a = 0; a < n; a++)                     /* (any two objects: what else overlaps) */
+                for (int b = a + 1; b < n; b++)
+                    if (!is_painting(L[a]) && !is_painting(L[b]) && pix_overlap(L[a], L[b])) other[L[a] - mm_objects][L[b] - mm_objects]++;
+            room_hots(r);                                   /* tap areas: how much of each picture they hold */
+            for (int h = 0; h < g_nhot; h++) {
+                const MMObject *o = g_hot[h].o;
+                MMImage *im = o ? mm_image(o->name) : NULL;
+                if (!im) continue;
+                long all = 0, in = 0;
+                for (int y = 0; y < im->h; y++)
+                    for (int x = 0; x < im->w; x++)
+                        if ((im->px[y * im->w + x] >> 24) > 128) { all++; in += inside(o->x + x, o->y + y, g_hot[h].x, g_hot[h].y, g_hot[h].w, g_hot[h].h); }
+                taps++;
+                full += in == all;
+                cover += all ? (double)in / all : 1;
+            }
+        }
+        maze_free(m);
+    }
+    printf("paintings: %d rooms, %d with a painting, %d where a painting overlaps another object\n", rooms, painted, bad_rooms);
+    for (int a = 0; a < MM_N_OBJECTS; a++)
+        for (int b = 0; b < MM_N_OBJECTS; b++)
+            if (pair[a][b]) printf("  painting %-12s over %-12s in %d rooms\n", mm_objects[a].name, mm_objects[b].name, pair[a][b]);
+    CHECK(bad_rooms == 0, "no painting overlaps another object (%d rooms)", bad_rooms);
+    for (int a = 0; a < MM_N_OBJECTS; a++)
+        for (int b = 0; b < MM_N_OBJECTS; b++)
+            if (other[a][b]) printf("  overlap (not a painting) %-12s %-12s in %d rooms\n", mm_objects[a].name, mm_objects[b].name, other[a][b]);
+    Room t = {0};                                           /* a saved room from before: QUEEN with PIC1-1 over her */
+    int q = -1, p1 = -1, p2 = -1;
+    for (int i = 0; i < MM_N_CHARACTERS; i++) if (!strcmp(obj(MM_G_CHARACTERS, i)->name, "QUEEN.DIB")) q = i;
+    for (int f = 0; f < MM_N_FURNITURE; f++) { if (!strcmp(obj(MM_G_FURNITURE, f)->name, "PIC1-1.DIB")) p1 = f; if (!strcmp(obj(MM_G_FURNITURE, f)->name, "PIC2-1.DIB")) p2 = f; }
+    t.chr = q; t.floor = NONE; t.furnA = 1ull << p1;
+    int clash = q >= 0 && p1 >= 0 && painting_clash(&t, obj(MM_G_FURNITURE, p1));
+    room_fix_paintings(&t);
+    CHECK(!clash || (t.furnA == (p2 >= 0 && !painting_clash(&t, obj(MM_G_FURNITURE, p2)) ? 1ull << p2 : 0)), "saved room: the painting moved to the other wall (%llx)", t.furnA);
+    printf("tap areas: %d tappable objects in those rooms, %.0f%% hold their whole picture, on average %.0f%% of it\n", taps,
+           100.0 * full / (taps ? taps : 1), 100.0 * cover / (taps ? taps : 1));
+}
 int main(int argc, char **argv)
 {
+    setvbuf(stdout, NULL, _IONBF, 0);                       /* nothing lost if a check crashes */
     g_data = argc > 1 ? argv[1] : "build/fixtures";
+    if (getenv("MM_FONTS")) g_real_fonts = text_init(getenv("MM_FONTS"));
     g_2006 = argc > 2 && !strcmp(argv[2], "--original");
     g_original = g_2006 || (argc > 2 && !strcmp(argv[2], "--edition"));   /* Encarta 95-98 disc */
     test_tables();
@@ -867,6 +1597,13 @@ int main(int argc, char **argv)
     test_settings_pictures();
     test_title();
     test_castle_music();
+    test_save_settings();
+    test_modern();
+    test_pages();
+    test_mute();
+    if (g_2006) test_overlay();                              /* (real data: the tap areas over the pictures) */
+    if (g_2006) test_room_overlap();
+    if (g_2006) test_glint_cover();
     if (!g_original) test_art();                             /* writes into the data folder: fixtures only */
     if (!g_original) test_add_disc();                        /* the same */
     test_draw_speed();

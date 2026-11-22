@@ -430,7 +430,7 @@ static MMImage *wide_load(int i, int hd)
 /* wide version of a picture for the current HD setting: image, its scale (1 or 2) and left extension */
 static int wide_get(const char *name, MMImage **im, int *k, int *left)
 {
-    if (!mm_view_ext()) return 0;
+    if (!mm_view_ox()) return 0;                                  /* only when the view shows the wide margins (not in portrait, CHANGE 2026-11-21) */
     char key[40];
     hd_key(name, key, sizeof key);
     for (int i = 0; i < g_nwide; i++)

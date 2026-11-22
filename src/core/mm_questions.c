@@ -11,6 +11,7 @@
  * ported from FUN_00522a30 / FUN_00522c10 / FUN_005226a0) works on.
  */
 #include <stdlib.h>
+#include <ctype.h>
 #include <string.h>
 #include <stdio.h>
 #include "mm.h"
@@ -282,11 +283,22 @@ static void decode_entities(char *s)
 {
     /* Encarta 97/98 lost the "<date " of living people's dates: "(1947-type=alive>)" -> "(1947-)" */
     for (char *a; s && (a = strstr(s, "type=alive>"));) memmove(a, a + 11, strlen(a + 11) + 1);
+    /* Encarta's own codes (2026-11-21: shown raw, and the formula ran past the box): chemical bonds and a time signature */
+    static const char *const ZE[4][2] = {{"&z.1horbar;", "\xE2\x80\x93"}, {"&z.2horbar;", "="}, {"&z.3horbar;", "\xE2\x89\xA1"},
+                                         {"&z.notation3.4;", "\xC2\xBE"}};   /* en dash, U+2261 triple bar, 3/4 */
+    for (int i = 0; s && i < 4; i++)
+        for (char *a; (a = strstr(s, ZE[i][0]));) {
+            size_t n = strlen(ZE[i][0]), m = strlen(ZE[i][1]);
+            memcpy(a, ZE[i][1], m);
+            memmove(a + m, a + n, strlen(a + n) + 1);
+        }
     if (!s || !strchr(s, '&')) return;
     char *o = s;
     for (char *p = s; *p;) {
         if (*p == '&') {
-            char *semi = strchr(p, ';');
+            char *semi = p + 1;                               /* the name, then ';' - or a typo of the data: */
+            while (*semi && (isalnum((unsigned char)*semi) || *semi == '#')) semi++;   /* "Moli&egrave:re", "&mdash." */
+            if (*semi != ';' && *semi != ':' && *semi != '.') semi = NULL;
             if (semi && semi - p < 12) {
                 unsigned cp = 0, cp2 = 0;
                 if (p[1] == '#') cp = (unsigned)(p[2] == 'x' || p[2] == 'X' ? strtoul(p + 3, NULL, 16) : strtoul(p + 2, NULL, 10));
@@ -300,7 +312,7 @@ static void decode_entities(char *s)
                 if (cp) {                                     /* UTF-8 is never longer than the entity */
                     o = put_utf8(o, cp);
                     if (cp2) o = put_utf8(o, cp2);
-                    p = semi + 1;
+                    p = semi + (*semi != '.');                   /* (a typo's '.' is a full stop: kept) */
                     continue;
                 }
             }

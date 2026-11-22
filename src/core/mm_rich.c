@@ -41,10 +41,15 @@ void mm_plain(const char *src, char *out, int n)
 }
 
 typedef struct { char txt[256]; int italic, space_before, w; } Piece;
+static int g_rich_height;                                  /* pixels of the last wrapped text */
+
+static Piece g_pc[400];                                    /* the last layout (mm_rich_page reads it) */
+static struct { int first, end, w; } g_ln[200];
+static int g_nl, g_np;                                    /* lines, pieces of the last layout */
 
 void mm_rich(MMCanvas *c, int x, int y, int w, int h, const char *text, int font, int ifont, uint32_t rgb, int flags)
 {
-    static Piece pc[400];
+    Piece *pc = g_pc;
     int np = 0, italic = 0, space = 0, len = 0;
     char buf[256];
     for (const char *p = text;; p++) {
@@ -97,17 +102,140 @@ void mm_rich(MMCanvas *c, int x, int y, int w, int h, const char *text, int font
         }
         return;
     }
-    int cx = 0, cy = 0;                                    /* word wrap */
-    for (int i = 0; i < np; i++) {
+    /* word wrap: lines first (CHANGE 2026-11-21: then each line is placed, so wrapped text can be centred - TX_CENTER -
+     * and the block centred vertically - TX_VCENTER - for the touch layout's buttons; mm_rich_height measures it) */
+    int nl = 0, cx = 0;
+#define ln g_ln
+    for (int i = 0; i < np && nl < 200; i++) {
         int gw = pc[i].w, j = i + 1;                       /* pieces glued to this one (no space between) */
         while (j < np && !pc[j].space_before) gw += pc[j++].w;
         int lead = (cx > 0 && pc[i].space_before) ? sp : 0;
-        if (cx > 0 && cx + lead + gw > W) { cx = 0; cy += lh; lead = 0; }
-        cx += lead;
-        for (int k = i; k < j; k++) {
-            plat_text_px(c, X0 + cx, Y0 + cy, pc[k].txt, pc[k].italic ? ifont : font, rgb, X0, Y0, X0 + W, Y0 + H);
-            cx += pc[k].w;
-        }
+        if (cx > 0 && cx + lead + gw > W) { ln[nl - 1].w = cx; cx = 0; lead = 0; if (nl < 200) ln[nl].first = i; nl++; }
+        else if (!nl) { ln[0].first = i; nl = 1; }
+        cx += lead + gw;
+        if (nl <= 200) { ln[nl - 1].end = j; ln[nl - 1].w = cx; }
         i = j - 1;
     }
+    if (nl > 200) nl = 200;
+    g_nl = nl;
+    g_np = np;
+    g_rich_height = nl * lh;
+    if (flags & TX_MEASURE) return;
+    int top = (flags & TX_VCENTER) && nl * lh < H ? (H - nl * lh) / 2 : 0;
+    for (int l = 0; l < nl; l++) {
+        int x = (flags & TX_CENTER) ? (W - ln[l].w) / 2 : (flags & TX_RIGHT) ? W - ln[l].w : 0;
+        if (x < 0) x = 0;
+        for (int k = ln[l].first; k < ln[l].end; k++) {
+            if (k > ln[l].first && pc[k].space_before) x += sp;
+            plat_text_px(c, X0 + x, Y0 + top + l * lh, pc[k].txt, pc[k].italic ? ifont : font, rgb, X0, Y0, X0 + W, Y0 + H);
+            x += pc[k].w;
+        }
+    }
+}
+#undef ln
+
+int mm_rich_height(MMCanvas *c, int w, const char *text, int font, int ifont)
+{
+    mm_rich(c, 0, 0, w, 1 << 20, text, font, ifont, 0, TX_WRAP | TX_MEASURE);
+    return (g_rich_height + c->scale - 1) / c->scale;
+}
+
+/* ---- paged text (CHANGE 2026-11-21, user: the typewriter cut off the end, the size changed while typing, and a larger
+ * font needs Next / Previous; then: "try to cut on the end of a sentence"): the WHOLE text is cut into words once at
+ * its final font; pages are filled down to their last line (user: half a page cut off too much); a page ends after a sentence
+ * that ends on that last line ('.', '!', '?', also before a closing quote), otherwise at the end of the last line.
+ * Each page is wrapped on its own from its first word. One page is drawn, with at most `chars` of its letters (the
+ * typewriter; -1 = all); positions never depend on how much is shown. Returns the letters on that page (spaces do not
+ * count); *npages = the number of pages. Top-left aligned, like the original pop-ups. ---- */
+static int utf8_count(const char *s) { int n = 0; for (; *s; s++) n += (*s & 0xC0) != 0x80; return n; }
+
+static int sentence_end(int k)                             /* piece k ends a sentence (and the next is a new word) */
+{
+    if (k + 1 < g_np && !g_pc[k + 1].space_before) return 0;
+    const char *t = g_pc[k].txt;
+    size_t n = strlen(t);
+    while (n && (t[n - 1] == '"' || t[n - 1] == '\'' || t[n - 1] == ')' || (unsigned char)t[n - 1] >= 0x80)) {
+        if ((unsigned char)t[n - 1] >= 0x80) {             /* a closing curly quote (UTF-8 E2 80 9D / 99) */
+            if (n >= 3 && (unsigned char)t[n - 3] == 0xE2 && (unsigned char)t[n - 2] == 0x80) { n -= 3; continue; }
+            break;
+        }
+        n--;
+    }
+    return n && (t[n - 1] == '.' || t[n - 1] == '!' || t[n - 1] == '?');
+}
+
+/* lines from piece s, at most maxl, pieces before `stop`: first / end piece of each line; returns the lines */
+static int wrap_from(int s, int stop, int W, int sp, int maxl, int *first, int *end)
+{
+    int nl = 0, cx = 0;
+    for (int i = s; i < stop; i++) {
+        int gw = g_pc[i].w, j = i + 1;                     /* pieces glued to this one (no space between) */
+        while (j < stop && !g_pc[j].space_before) gw += g_pc[j++].w;
+        int lead = (cx > 0 && g_pc[i].space_before) ? sp : 0;
+        if (!nl || (cx > 0 && cx + lead + gw > W)) {
+            if (nl == maxl) break;
+            first[nl] = i;
+            nl++;
+            cx = 0;
+            lead = 0;
+        }
+        cx += lead + gw;
+        end[nl - 1] = j;
+        i = j - 1;
+    }
+    return nl;
+}
+
+int mm_rich_overflow;                                       /* (tests) words drawn past the right edge of the box */
+int mm_rich_page(MMCanvas *c, int x, int y, int w, int h, const char *text, int font, int ifont, uint32_t rgb,
+                 int page, int chars, int *npages, int *nlines)
+{
+    mm_rich(c, 0, 0, w, 1 << 20, text, font, ifont, 0, TX_WRAP | TX_MEASURE);   /* the words and their widths */
+    int s = c->scale, X0 = x * s, Y0 = y * s, W = w * s, H = h * s;
+    int lh = plat_text_px_height(c, font), sp = plat_text_px_width(c, " ", font);
+    int per = H / (lh > 0 ? lh : 1);
+    if (per < 1) per = 1;
+    if (per > 200) per = 200;
+    static int start[65], first[201], end[201];
+    int pages = 0, p0 = 0;
+    while (pages < 64) {                                    /* page starts */
+        start[pages++] = p0;
+        int nl = wrap_from(p0, g_np, W, sp, per, first, end);
+        if (!nl || end[nl - 1] >= g_np) break;              /* the rest fits: the last page */
+        int cut = end[nl - 1];
+        {                                                   /* a sentence that ends on the page's last line */
+            int l = nl - 1, k = end[l] - 1;
+            while (k >= first[l] && !sentence_end(k)) k--;
+            if (k >= first[l]) cut = k + 1;
+        }
+        p0 = cut;
+    }
+    start[pages] = g_np;
+    if (npages) *npages = pages;
+    if (page >= pages) page = pages - 1;
+    if (page < 0) page = 0;
+    int nl = wrap_from(start[page], start[page + 1], W, sp, per, first, end), shown = 0;
+    if (nlines) *nlines = nl;
+    for (int l = 0; l < nl; l++) {
+        int px = 0;
+        for (int k = first[l]; k < end[l]; k++) {
+            if (k > first[l] && g_pc[k].space_before) px += sp;
+            int n = utf8_count(g_pc[k].txt), f = g_pc[k].italic ? ifont : font;
+            if (chars < 0 || shown + n <= chars)
+                plat_text_px(c, X0 + px, Y0 + l * lh, g_pc[k].txt, f, rgb, X0, Y0, X0 + W, Y0 + H);
+            else if (shown < chars) {                      /* the word being typed: its first letters */
+                char t[256];
+                size_t b = 0;
+                for (int m = 0; g_pc[k].txt[b] && m <= chars - shown; b++)
+                    if ((g_pc[k].txt[b] & 0xC0) != 0x80 && ++m > chars - shown) break;
+                memcpy(t, g_pc[k].txt, b);
+                t[b] = 0;
+                plat_text_px(c, X0 + px, Y0 + l * lh, t, f, rgb, X0, Y0, X0 + W, Y0 + H);
+            }
+            shown += n;
+            px += g_pc[k].w;
+            if (px > W) mm_rich_overflow++;
+        }
+    }
+    return shown;
 }

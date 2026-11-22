@@ -58,6 +58,8 @@ void plat_export_data(void) { export_for_phone(); }
 #define IDM_EXPORT 108
 #define IDM_UPDATE 109
 #define IDM_AUTOUPD 110
+#define IDM_SETTINGS 111
+#define IDM_EXIT 112
 
 static HWND g_hwnd;
 static HMENU g_menu;
@@ -66,8 +68,6 @@ static HDC g_memdc;
 static HBITMAP g_dib;
 static MMCanvas g_canvas;
 static int g_scale = 1, g_offx, g_offy, g_dirty = 1, g_hand;
-static HFONT g_fonts[FONT_COUNT];
-static int g_font_scale;
 
 /* ---- UTF-8 <-> UTF-16 ---- */
 static wchar_t *wide(const char *s, wchar_t *buf, int n)
@@ -385,11 +385,12 @@ static void fonts_init(void)
     }
 }
 
-/* ---- text: Tahoma 8pt (Encarta font resource 32001), bold, Arial for the player list (4921) ---- */
-static void make_fonts(int s)
+/* ---- text: Tahoma 8pt (Encarta font resource 32001), bold, Arial for the player list (4921). CHANGE 2026-11-21: one
+ * font set per canvas scale (a sub-canvas of the touch layout, mm_canvas_sub, draws at a multiple of the window's
+ * scale), kept in a small cache (font_at); the least recently used set (never the window canvas's one) is deleted
+ * when a new scale needs room. ---- */
+static void create_fonts(HFONT *g_fonts, int s)
 {
-    if (g_font_scale == s) return;
-    for (int i = 0; i < FONT_COUNT; i++) if (g_fonts[i]) DeleteObject(g_fonts[i]);
     g_fonts[FONT_TEXT] = CreateFontW(-11 * s, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_tahoma);
     g_fonts[FONT_BOLD] = CreateFontW(-11 * s, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_tahoma);
     g_fonts[FONT_LIST] = CreateFontW(-13 * s, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_arial);
@@ -409,8 +410,52 @@ static void make_fonts(int s)
     g_fonts[FONT_LEVEL] = CreateFontW(-25 * s, 0, 0, 0, FW_NORMAL, TRUE, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_palatino);
     g_fonts[FONT_ITALIC] = CreateFontW(-11 * s, 0, 0, 0, FW_NORMAL, TRUE, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_tahoma);
     g_fonts[FONT_POINTS] = CreateFontW(-24 * s, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, g_times);
-    g_font_scale = s;
+    /* Modern options (touch layout, Large text): sans faces, em height in logical pixels (mm.h) */
+    static const struct { int font, px, weight, italic; } T[] = {
+        {FONT_T, 14, FW_NORMAL, 0}, {FONT_T_B, 14, FW_BOLD, 0}, {FONT_T_H, 18, FW_BOLD, 0}, {FONT_T_L, 17, FW_NORMAL, 0},
+        {FONT_T_LB, 17, FW_BOLD, 0}, {FONT_Q_L, 13, FW_NORMAL, 0}, {FONT_Q_LI, 13, FW_NORMAL, 1}};
+    for (size_t i = 0; i < sizeof T / sizeof T[0]; i++)
+        g_fonts[T[i].font] = CreateFontW(-T[i].px * s, 0, 0, 0, T[i].weight, T[i].italic, 0, 0, DEFAULT_CHARSET, 0, 0,
+                                         CLEARTYPE_QUALITY, 0, g_tahoma);
 }
+
+#define FONT_SETS 4
+static struct { int scale; unsigned used; HFONT f[FONT_COUNT]; } g_fontset[FONT_SETS];
+
+static HFONT font_at(int scale, int font)
+{
+    static unsigned clock;
+    int slot = -1;
+    if (scale < 1) scale = 1;
+    if (font < 0 || font >= FONT_COUNT) font = FONT_TEXT;
+    for (int i = 0; i < FONT_SETS && slot < 0; i++) if (g_fontset[i].scale == scale) slot = i;
+    if (slot < 0) {
+        for (int i = 0; i < FONT_SETS && slot < 0; i++) if (!g_fontset[i].scale) slot = i;
+        for (int i = 0; i < FONT_SETS && slot < 0; i++) if (g_fontset[i].scale != g_scale) slot = i;
+        for (int i = 0; i < FONT_SETS; i++)
+            if (g_fontset[i].scale != g_scale && g_fontset[i].used < g_fontset[slot].used) slot = i;
+        if (g_fontset[slot].scale) {                          /* evict: none of its fonts may stay selected */
+            SelectObject(g_memdc, GetStockObject(SYSTEM_FONT));
+            for (int i = 0; i < FONT_COUNT; i++) if (g_fontset[slot].f[i]) DeleteObject(g_fontset[slot].f[i]);
+        }
+        memset(g_fontset[slot].f, 0, sizeof g_fontset[slot].f);
+        create_fonts(g_fontset[slot].f, scale);
+        g_fontset[slot].scale = scale;
+    }
+    g_fontset[slot].used = ++clock;
+    return g_fontset[slot].f[font];
+}
+
+/* a sub-canvas (mm_canvas_sub) is a rectangle of the window's DIB: GDI draws through g_memdc on the whole DIB, so text
+ * is moved by its origin and clipped to it */
+static int is_sub(const MMCanvas *c) { return c->orgx || c->orgy || c->w != g_canvas.w || c->h != g_canvas.h; }
+static void sub_clip_begin(const MMCanvas *c)
+{
+    if (!is_sub(c)) return;
+    SaveDC(g_memdc);
+    IntersectClipRect(g_memdc, c->orgx, c->orgy, c->orgx + c->w, c->orgy + c->h);
+}
+static void sub_clip_end(const MMCanvas *c) { if (is_sub(c)) RestoreDC(g_memdc, -1); }
 
 void plat_text(MMCanvas *c, int x, int y, int w, int h, const char *utf8, int font, uint32_t rgb, int flags)
 {
@@ -418,7 +463,7 @@ void plat_text(MMCanvas *c, int x, int y, int w, int h, const char *utf8, int fo
     wide(utf8, buf, 4096);
     int s = c->scale;
     x += c->ox;                                           /* widescreen margin */
-    RECT r = {x * s, y * s, (x + w) * s, (y + h) * s};
+    RECT r = {c->orgx + x * s, c->orgy + y * s, c->orgx + (x + w) * s, c->orgy + (y + h) * s};
     UINT f = DT_NOPREFIX;
     if (flags & TX_CENTER) f |= DT_CENTER;
     if (flags & TX_RIGHT) f |= DT_RIGHT;
@@ -426,10 +471,12 @@ void plat_text(MMCanvas *c, int x, int y, int w, int h, const char *utf8, int fo
     else f |= DT_SINGLELINE;
     if (flags & TX_VCENTER) f |= DT_VCENTER;
     if (flags & TX_ELLIPSIS) f |= DT_END_ELLIPSIS;
-    SelectObject(g_memdc, g_fonts[font]);
+    sub_clip_begin(c);
+    SelectObject(g_memdc, font_at(s, font));
     SetBkMode(g_memdc, TRANSPARENT);
     SetTextColor(g_memdc, RGB(rgb >> 16 & 255, rgb >> 8 & 255, rgb & 255));
     DrawTextW(g_memdc, buf, -1, &r, f);
+    sub_clip_end(c);
     GdiFlush();
 }
 
@@ -437,9 +484,8 @@ int plat_text_px_width(MMCanvas *c, const char *utf8, int font)
 {
     wchar_t buf[1024];
     SIZE sz = {0};
-    (void)c;
     wide(utf8, buf, 1024);
-    SelectObject(g_memdc, g_fonts[font]);
+    SelectObject(g_memdc, font_at(c->scale, font));
     GetTextExtentPoint32W(g_memdc, buf, (int)wcslen(buf), &sz);
     return sz.cx;
 }
@@ -447,8 +493,7 @@ int plat_text_px_width(MMCanvas *c, const char *utf8, int font)
 int plat_text_px_height(MMCanvas *c, int font)
 {
     TEXTMETRICW tm;
-    (void)c;
-    SelectObject(g_memdc, g_fonts[font]);
+    SelectObject(g_memdc, font_at(c->scale, font));
     GetTextMetricsW(g_memdc, &tm);
     return tm.tmHeight;
 }
@@ -456,8 +501,7 @@ int plat_text_px_height(MMCanvas *c, int font)
 int plat_text_px_ascent(MMCanvas *c, int font)
 {
     TEXTMETRICW tm;
-    (void)c;
-    SelectObject(g_memdc, g_fonts[font]);
+    SelectObject(g_memdc, font_at(c->scale, font));
     GetTextMetricsW(g_memdc, &tm);
     return tm.tmAscent;
 }
@@ -470,8 +514,15 @@ void plat_text_px(MMCanvas *c, int X, int Y, const char *utf8, int font, uint32_
     cx0 += m;
     cx1 += m;
     wide(utf8, buf, 1024);
-    RECT clip = {cx0, cy0, cx1, cy1};
-    SelectObject(g_memdc, g_fonts[font]);
+    if (cx0 < 0) cx0 = 0;                                 /* inside this canvas (a sub-canvas: its rectangle) */
+    if (cy0 < 0) cy0 = 0;
+    if (cx1 > c->w) cx1 = c->w;
+    if (cy1 > c->h) cy1 = c->h;
+    if (cx1 <= cx0 || cy1 <= cy0) return;
+    X += c->orgx;
+    Y += c->orgy;
+    RECT clip = {c->orgx + cx0, c->orgy + cy0, c->orgx + cx1, c->orgy + cy1};
+    SelectObject(g_memdc, font_at(c->scale, font));
     SetBkMode(g_memdc, TRANSPARENT);
     SetTextAlign(g_memdc, TA_LEFT | TA_TOP | TA_NOUPDATECP);
     SetTextColor(g_memdc, RGB(rgb >> 16 & 255, rgb >> 8 & 255, rgb & 255));
@@ -484,7 +535,7 @@ int plat_text_width(const char *utf8, int font)
     wchar_t buf[1024];
     SIZE sz = {0};
     wide(utf8, buf, 1024);
-    SelectObject(g_memdc, g_fonts[font]);
+    SelectObject(g_memdc, font_at(g_scale, font));       /* the window canvas's scale */
     GetTextExtentPoint32W(g_memdc, buf, (int)wcslen(buf), &sz);
     return sz.cx / (g_scale ? g_scale : 1);
 }
@@ -789,7 +840,10 @@ static void update_menu(void)
     CheckMenuItem(g_menu, IDM_AUTOUPD, MF_BYCOMMAND | (update_off() ? MF_UNCHECKED : MF_CHECKED));
 }
 
-static int view_w(void) { return MM_W + 2 * mm_view_ext(); }   /* logical width: 636, or 764 in widescreen */
+/* the view's logical size (mm.h): classic 636 x 437 (764 in widescreen), touch layout 936 x 437 or 636 x 1311 */
+static int view_w(void) { return mm_view_w(); }
+static int view_h(void) { return mm_view_h(); }
+static int g_user_resize, g_game_on;                      /* mm_set_screen from WM_SIZE / mm_init done */
 
 /* Display: the canvas is drawn at a whole scale (g_scale) and shown in the client area at the largest size that
  * keeps its proportions (g_dstw x g_dsth at g_offx, g_offy). CHANGE: no longer only whole scales with black
@@ -803,28 +857,27 @@ static void layout(void)
 {
     RECT rc;
     GetClientRect(g_hwnd, &rc);
-    int cw = rc.right, chh = rc.bottom, vw = view_w();
+    int cw = rc.right, chh = rc.bottom, vw = view_w(), vh = view_h();
     if (cw < 1) cw = 1;
     if (chh < 1) chh = 1;
-    double f = (double)cw / vw < (double)chh / MM_H ? (double)cw / vw : (double)chh / MM_H;
+    double f = (double)cw / vw < (double)chh / vh ? (double)cw / vw : (double)chh / vh;
     int s = (int)f;
     if (f - s > 0.001) s++;                                /* next whole scale up, scaled down when shown */
     if (s < 1) s = 1;
     if (s > 8) s = 8;
     g_dstw = (int)(vw * f + 0.5);
-    g_dsth = (int)(MM_H * f + 0.5);
-    double aspect = ((double)cw / chh) / ((double)vw / MM_H);
+    g_dsth = (int)(vh * f + 0.5);
+    double aspect = ((double)cw / chh) / ((double)vw / vh);
     if (aspect > 1 - FILL_TOLERANCE && aspect < 1 + FILL_TOLERANCE) { g_dstw = cw; g_dsth = chh; }
     g_offx = (cw - g_dstw) / 2;
     g_offy = (chh - g_dsth) / 2;
-    if (s != g_scale || !g_dib || g_canvas.w != vw * s) {
-        int new_scale = s != g_scale || !g_dib;
+    if (s != g_scale || !g_dib || g_canvas.w != vw * s || g_canvas.h != vh * s) {
         g_scale = s;
         if (g_dib) DeleteObject(g_dib);
         BITMAPINFO bi = {0};
         bi.bmiHeader.biSize = sizeof bi.bmiHeader;
         bi.bmiHeader.biWidth = vw * s;
-        bi.bmiHeader.biHeight = -MM_H * s;
+        bi.bmiHeader.biHeight = -vh * s;
         bi.bmiHeader.biPlanes = 1;
         bi.bmiHeader.biBitCount = 32;
         void *bits;
@@ -832,12 +885,12 @@ static void layout(void)
         SelectObject(g_memdc, g_dib);
         g_canvas.px = bits;
         g_canvas.w = vw * s;
-        g_canvas.h = MM_H * s;
+        g_canvas.h = vh * s;
         g_canvas.stride = vw * s;
         g_canvas.scale = s;
-        if (new_scale) make_fonts(s);
+        g_canvas.orgx = g_canvas.orgy = 0;
     }
-    g_canvas.ox = mm_view_ext();
+    g_canvas.ox = mm_view_ox();
     g_dirty = 1;
 }
 
@@ -868,7 +921,8 @@ static void set_fullscreen(int on)
 }
 
 /* Size the window to the biggest whole scale that fits the work area (keep_scale: stay at the current scale when
- * it still fits; used when widescreen is toggled), centred on its old centre. A maximized window keeps its size. */
+ * it still fits; used when the view changes: widescreen, layout), centred on its old centre. A maximized window keeps
+ * its size. A view taller than the work area at scale 1 (the portrait touch layout) gets the biggest window that fits. */
 static void size_window(int keep_scale)
 {
     if (g_full || IsZoomed(g_hwnd)) { layout(); InvalidateRect(g_hwnd, NULL, FALSE); return; }
@@ -876,16 +930,22 @@ static void size_window(int keep_scale)
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
     GetWindowRect(g_hwnd, &wr);
     DWORD style = (DWORD)GetWindowLongW(g_hwnd, GWL_STYLE);
-    int vw = view_w(), s = 1;
+    int vw = view_w(), vh = view_h(), s = 1;
     for (int t = 2; t <= 8; t++) {
-        RECT r = {0, 0, vw * t, MM_H * t};
+        RECT r = {0, 0, vw * t, vh * t};
         AdjustWindowRect(&r, style, TRUE);
         if (r.right - r.left <= wa.right - wa.left && r.bottom - r.top <= wa.bottom - wa.top) s = t;
     }
     if (keep_scale && g_scale < s) s = g_scale;
-    RECT r = {0, 0, vw * s, MM_H * s};
+    RECT r = {0, 0, vw * s, vh * s};
     AdjustWindowRect(&r, style, TRUE);
     int ww = r.right - r.left, wh = r.bottom - r.top;
+    if (ww > wa.right - wa.left || wh > wa.bottom - wa.top) {   /* too big even at scale 1: shrink, same shape */
+        int fw = ww - vw * s, fh = wh - vh * s;               /* frame, title bar and menu */
+        double kw = (double)(wa.right - wa.left - fw) / vw, kh = (double)(wa.bottom - wa.top - fh) / vh;
+        double k = kw < kh ? kw : kh;
+        if (k > 0.1) { ww = (int)(vw * k) + fw; wh = (int)(vh * k) + fh; }
+    }
     int x = (wr.left + wr.right - ww) / 2, y = (wr.top + wr.bottom - wh) / 2;
     if (x + ww > wa.right) x = wa.right - ww;
     if (y + wh > wa.bottom) y = wa.bottom - wh;
@@ -896,7 +956,36 @@ static void size_window(int keep_scale)
     InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
-void plat_view_changed(void) { size_window(1); update_menu(); }   /* also from the settings screen */
+/* widescreen toggled, the layout setting changed (also from the settings screen), or the window changed shape */
+void plat_view_changed(void)
+{
+    if (g_user_resize) { layout(); InvalidateRect(g_hwnd, NULL, FALSE); }   /* the player sized it: keep the size */
+    else size_window(1);
+    update_menu();
+}
+
+/* the client area's shape for the core's layout choice (portrait / landscape; touch 0: the player can force the touch
+ * layout in Settings) */
+static void screen_changed(void)
+{
+    RECT rc;
+    if (!g_game_on || !GetClientRect(g_hwnd, &rc)) return;
+    g_user_resize = 1;
+    mm_set_screen(rc.right, rc.bottom, 0);
+    g_user_resize = 0;
+}
+
+/* frame pacing: the core's 50 ms tick; while it animates (mm_animating) about 60 per second with a redraw each time.
+ * 15 ms, not 16: SetTimer fires on the system clock's 15.6 ms ticks, so 16 would wait for two of them. */
+static int g_fast_timer;
+static void pace(void)
+{
+    int anim = mm_animating();
+    if (anim != g_fast_timer) {
+        g_fast_timer = anim;
+        SetTimer(g_hwnd, TIMER_ID, anim ? 15 : 50, NULL);
+    }
+}
 
 static int mods(void)
 {
@@ -908,19 +997,20 @@ static void mouse(LPARAM lp, int button, int action)
     int px = GET_X_LPARAM(lp) - g_offx, py = GET_Y_LPARAM(lp) - g_offy;
     int vw = view_w();                                    /* window pixels -> logical (shown size g_dstw x g_dsth) */
     int x = (int)floor((double)px * vw / (g_dstw > 0 ? g_dstw : 1)) - g_canvas.ox;
-    int y = (int)floor((double)py * MM_H / (g_dsth > 0 ? g_dsth : 1));
+    int y = (int)floor((double)py * view_h() / (g_dsth > 0 ? g_dsth : 1));
     mm_mouse(x, y, button, action, mods());
 }
 
 static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
-    case WM_SIZE: layout(); InvalidateRect(h, NULL, TRUE); return 0;
+    case WM_SIZE: layout(); screen_changed(); InvalidateRect(h, NULL, TRUE); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(h, &ps);
         if (g_dirty) { mm_draw(&g_canvas); g_dirty = 0; }
+        if (g_game_on) pace();                            /* an animation started by input: fast ticks at once */
         RECT rc;
         GetClientRect(h, &rc);
         HBRUSH black = GetStockObject(BLACK_BRUSH);
@@ -936,7 +1026,11 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         EndPaint(h, &ps);
         return 0;
     }
-    case WM_TIMER: mm_tick(); return 0;
+    case WM_TIMER:
+        mm_tick();
+        pace();
+        if (g_fast_timer) plat_invalidate();
+        return 0;
     case WM_MOUSEMOVE: mouse(lp, 0, MA_MOVE); return 0;
     case WM_LBUTTONDOWN: mouse(lp, MMB_LEFT, MA_DOWN); return 0;
     case WM_RBUTTONDOWN: mouse(lp, MMB_RIGHT, MA_DOWN); return 0;
@@ -980,11 +1074,13 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         switch (LOWORD(wp)) {
         case IDM_NEW: mm_cmd(CMD_NEW_GAME); break;
         case IDM_QUIT: mm_cmd(CMD_QUIT); break;
+        case IDM_EXIT: mm_cmd(CMD_EXIT); break;
         case IDM_MUSIC: mm_cmd(CMD_MUSIC); break;
         case IDM_SOUND: mm_cmd(CMD_SOUND); break;
         case IDM_HD: mm_cmd(CMD_HD); break;
         case IDM_WIDE: mm_cmd(CMD_WIDE); break;
         case IDM_FULL: set_fullscreen(!g_full); break;
+        case IDM_SETTINGS: mm_cmd(CMD_SETTINGS); break;
         case IDM_EXPORT: export_for_phone(); break;
         case IDM_UPDATE: update_check(1); break;
         case IDM_AUTOUPD: plat_set_setting("update_check", update_off() ? "1" : "0"); break;
@@ -1004,6 +1100,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_ACTIVATE: mm_activate(LOWORD(wp) != WA_INACTIVE); break;
     case WM_CLOSE: mm_shutdown(); DestroyWindow(h); return 0;
+    case WM_ENDSESSION: if (wp) mm_save_players(); return 0;   /* Windows logs off / shuts down: no WM_CLOSE */
     case WM_DESTROY: PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(h, msg, wp, lp);
@@ -1196,10 +1293,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
     AppendMenuW(sub, MF_STRING, IDM_HD, L"Use &HD Art\tF2");
     AppendMenuW(sub, MF_STRING, IDM_WIDE, L"&Widescreen\tF3");
     AppendMenuW(sub, MF_STRING, IDM_FULL, L"&Full Screen\tF11");
+    AppendMenuW(sub, MF_STRING, IDM_SETTINGS, L"Se&ttings...");
     AppendMenuW(sub, MF_SEPARATOR, 0, NULL);
     AppendMenuW(sub, MF_STRING, IDM_EXPORT, L"&Export Data for the Phone App...");
     AppendMenuW(sub, MF_STRING, IDM_UPDATE, L"Check for &Updates...");
     AppendMenuW(sub, MF_STRING, IDM_AUTOUPD, L"&Look for Updates at Start");
+    AppendMenuW(sub, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(sub, MF_STRING, IDM_EXIT, L"E&xit");       /* "Quit Game" returns to the castle gate (CHANGE) */
     AppendMenuW(g_menu, MF_POPUP, (UINT_PTR)sub, L"&MindMaze");
 
     /* biggest whole scale that fits the work area */
@@ -1227,7 +1327,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
         MessageBoxW(g_hwnd, wide(err, w, 512), L"MindMaze", MB_ICONERROR);
         return 1;
     }
-    if (mm_view_ext()) size_window(0);                    /* the window was made before the setting was read */
+    g_game_on = 1;
+    screen_changed();                                     /* the window's shape (layout setting touch: portrait / landscape) */
+    if (view_w() != MM_W || view_h() != MM_H) size_window(0);   /* the window was made before the settings were read */
     update_menu();
     ShowWindow(g_hwnd, show);
     if (cli.fullscreen == 1) set_fullscreen(1);         /* --fullscreen */
