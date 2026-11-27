@@ -1,8 +1,8 @@
 /* MindMaze - built-in updater, the portable part (CHANGE 2026-11-20; rules: REA/release-rules.md "Updater").
  *
  * The desktop builds ask GitHub for the newest release (releases/latest of MM_REPO_URL), compare its tag with
- * MM_VERSION and, after the player agrees, download their own file (MindMaze.exe, MindMaze-linux-x86_64.tar.gz,
- * MindMaze-macos.zip), check it against the release's "<file>.sha256", put it in place and start again.
+ * MM_VERSION and, after the player agrees, download their versioned platform archive, check it against the
+ * release's "<file>.sha256", put it in place and start again.
  * Downloading and replacing files is the platform's job (win32_update.c, sdl_update.c); the Android app does the
  * same in shell.js + UpdaterPlugin.java. Nothing here touches the network or the disk. */
 #pragma once

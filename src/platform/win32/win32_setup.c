@@ -111,7 +111,7 @@ static void io_progress(MXIO *io, int pct, const char *step)
         static int last = -100;
         if (pct >= last && pct < last + 10 && pct != 100) return;  /* every 10 % (a new step may start at 0 again) */
         last = pct;
-        fprintf(stderr, "  %3d%% %s\n", pct, step ? step : "");
+        fprintf(stderr, "progress %.2f %s\n", pct / 100.0, step ? step : "");
         return;
     }
     if (!g_text) return;

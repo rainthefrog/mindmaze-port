@@ -58,7 +58,7 @@ static void io_progress(MXIO *io, int pct, const char *step)
     if (!g_headless) { sdl_progress(pct, step); return; }
     if (pct >= last && pct < last + 10 && pct != 100) return;    /* every 10 % (a new step may start at 0 again) */
     last = pct;
-    if (pct >= 0) fprintf(stderr, "  %3d%% %s\n", pct, step ? step : "");
+    if (pct >= 0) fprintf(stderr, "progress %.2f %s\n", pct / 100.0, step ? step : "");
     else if (step && *step) fprintf(stderr, "  %s\n", step);
 }
 

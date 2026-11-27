@@ -6,7 +6,7 @@
 #include "mm.h"
 #include "mm_tables.h"
 
-CliOptions cli = {-1, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0};
+CliOptions cli = {-1, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0};
 
 #define MAX_OVERRIDES 32
 static struct { char key[64]; char value[512]; } g_over[MAX_OVERRIDES];
@@ -72,6 +72,7 @@ const char *cli_usage(void)
            "                           it (ENCARTA.EXE, MINDMAZE.DB); no questions asked\n"
            "\n"
            "Actions (no game window; exit code 0 = done, 1 = failed, 2 = wrong usage):\n"
+           "      --prepare           extract --disc into --home, then exit (for launchers)\n"
            "      --add-disc <path>    add the questions of another Encarta disc\n"
            "      --export <file.zip>  write the data file for the phone app\n"
            "      --prepare-art        write the kit for HD / widescreen pictures again (data/art/work)\n"
@@ -142,6 +143,7 @@ int cli_parse(int argc, char **argv, char *err, int errlen)
         }
         else if (!strcmp(a, "--home") || !strcmp(a, "--data-dir")) { VALUE(); cli.home = v; }
         else if (!strcmp(a, "--disc")) { VALUE(); cli.disc = v; }
+        else if (!strcmp(a, "--prepare")) { cli.prepare = 1; cli.action = 1; }
         else if (!strcmp(a, "--add-disc")) { VALUE(); cli.add_disc = v; cli.action = 1; }
         else if (!strcmp(a, "--export")) { VALUE(); cli.export_zip = v; cli.action = 1; }
         else if (!strcmp(a, "--prepare-art")) { cli.prepare_art = 1; cli.action = 1; }

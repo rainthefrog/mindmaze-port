@@ -3,7 +3,7 @@
  * At start (unless --no-update-check or update_check=0 in mindmaze.ini) win32_main.c asks GitHub for the newest
  * release in the background; when it is newer, win32_update_offer asks the player: Yes = update now, No = later
  * (the menu has "Check for Updates..." and the switch "Look for Updates at Start" = update_check).
- * Updating: MindMaze.exe.sha256 and MindMaze.exe are downloaded, the checksum compared, the new exe written as <exe>.new, the running exe renamed to
+ * Updating: the versioned Windows zip and checksum are downloaded, MindMaze.exe is extracted to <exe>.new, the running exe renamed to
  * <exe>.old (Windows allows renaming a running exe), <exe>.new renamed to <exe>, and the new exe started with the
  * same command line. The next start deletes <exe>.old. A read-only folder (Program Files): the release page opens.
  * --update does the same without a window (no restart). */
@@ -17,7 +17,11 @@
 #include "cli.h"
 #include "update.h"
 
-#define ASSET "MindMaze.exe"
+static void asset_name(const UpdRelease *r, char *out, size_t n)
+{
+    const char *v = r->tag[0] == 'v' ? r->tag + 1 : r->tag;
+    snprintf(out, n, "MindMaze-%s-windows-x86.zip", v);
+}
 
 void win32_update_cleanup(void);
 int win32_update_cli(void);
@@ -116,22 +120,36 @@ static int write_all(const wchar_t *path, const void *d, size_t n)
     return CloseHandle(f) && ok;
 }
 
-/* download, check and put the new exe in place. 1 = done (err empty), 0 = failed (err says why) */
+typedef struct { const uint8_t *exe; size_t n; } ZipExe;
+static int zip_exe(void *ud, const char *path, char type, unsigned mode, const uint8_t *data, size_t n)
+{
+    (void)mode;
+    ZipExe *z = ud;
+    if (type == 'f' && !_stricmp(path, "MindMaze.exe")) { z->exe = data; z->n = n; }
+    return 1;
+}
+
+/* download, check and put the new exe from the release zip in place. */
 static int install(const UpdRelease *r, int show, char *err, size_t errlen)
 {
     exe_path();
-    const char *url = upd_asset(r, ASSET), *sumurl = upd_asset(r, ASSET ".sha256");
-    if (!url || !sumurl) { snprintf(err, errlen, "The release %s has no %s with its checksum.", r->tag, ASSET); return 0; }
+    char asset[160], sumname[168];
+    asset_name(r, asset, sizeof asset);
+    snprintf(sumname, sizeof sumname, "%s.sha256", asset);
+    const char *url = upd_asset(r, asset), *sumurl = upd_asset(r, sumname);
+    if (!url || !sumurl) { snprintf(err, errlen, "The release %s has no %s with its checksum.", r->tag, asset); return 0; }
     wchar_t newp[MAX_PATH * 2 + 8], oldp[MAX_PATH * 2 + 8];
     swprintf(newp, MAX_PATH * 2 + 8, L"%ls.new", g_exe);
     swprintf(oldp, MAX_PATH * 2 + 8, L"%ls.old", g_exe);
     if (!write_all(newp, "", 0)) { snprintf(err, errlen, "The program's folder is read-only."); return 0; }
     size_t sl = 0, n = 0;
-    char *sum = download(sumurl, &sl, 0, ""), *exe = sum ? download(url, &n, show, "Downloading the new version") : NULL;
+    char *sum = download(sumurl, &sl, 0, ""), *arc = sum ? download(url, &n, show, "Downloading the new version") : NULL;
     int ok = 0;
-    if (!sum || !exe) snprintf(err, errlen, "The download failed (no connection?).");
-    else if (!upd_sha_ok(exe, n, sum, sl)) snprintf(err, errlen, "The download is damaged (checksum differs); nothing was changed.");
-    else if (!write_all(newp, exe, n)) snprintf(err, errlen, "Could not write the new program.");
+    ZipExe ze = {0};
+    if (!sum || !arc) snprintf(err, errlen, "The download failed (no connection?).");
+    else if (!upd_sha_ok(arc, n, sum, sl)) snprintf(err, errlen, "The download is damaged (checksum differs); nothing was changed.");
+    else if (!upd_unzip((const uint8_t *)arc, n, zip_exe, &ze) || !ze.exe) snprintf(err, errlen, "The download is not a MindMaze package.");
+    else if (!write_all(newp, ze.exe, ze.n)) snprintf(err, errlen, "Could not write the new program.");
     else {
         DeleteFileW(oldp);
         if (!MoveFileExW(g_exe, oldp, MOVEFILE_REPLACE_EXISTING)) snprintf(err, errlen, "Could not move the running program aside.");
@@ -142,7 +160,7 @@ static int install(const UpdRelease *r, int show, char *err, size_t errlen)
     }
     if (!ok) DeleteFileW(newp);
     free(sum);
-    free(exe);
+    free(arc);
     return ok;
 }
 
@@ -162,7 +180,8 @@ void win32_update_offer(HWND owner, const char *json, int manual)
         if (manual) MessageBoxW(owner, L"MindMaze could not reach GitHub to look for a new version.", L"MindMaze", MB_ICONWARNING);
         return;
     }
-    if (!upd_newer(r.tag, MM_VERSION) || !upd_asset(&r, ASSET)) {
+    char asset[160]; asset_name(&r, asset, sizeof asset);
+    if (!upd_newer(r.tag, MM_VERSION) || !upd_asset(&r, asset)) {
         if (manual) {
             swprintf(msg, 800, L"MindMaze %hs is the newest version.", MM_VERSION);
             MessageBoxW(owner, msg, L"MindMaze", MB_ICONINFORMATION);
@@ -209,7 +228,8 @@ int win32_update_cli(void)
     int ok = json && upd_parse(json, &r);
     free(json);
     if (!ok) { fprintf(stderr, "MindMaze: could not read the newest release from %s\n", api); return 1; }
-    if (!upd_newer(r.tag, MM_VERSION) || !upd_asset(&r, ASSET)) { printf("MindMaze %s is the newest version.\n", MM_VERSION); return 0; }
+    char asset[160]; asset_name(&r, asset, sizeof asset);
+    if (!upd_newer(r.tag, MM_VERSION) || !upd_asset(&r, asset)) { printf("MindMaze %s is the newest version.\n", MM_VERSION); return 0; }
     printf("Updating MindMaze %s to %s...\n", MM_VERSION, r.tag);
     fflush(stdout);
     if (!install(&r, 0, err, sizeof err)) { fprintf(stderr, "MindMaze: the update did not work: %s\n", err); return 1; }

@@ -1195,6 +1195,19 @@ static void report(int error, const char *fmt, ...)
     MessageBoxW(NULL, w, L"MindMaze", error ? MB_ICONWARNING : MB_ICONINFORMATION);
 }
 
+static void open_log(void)
+{
+    wchar_t now[MAX_PATH * 2], old[MAX_PATH * 2];
+    swprintf(now, MAX_PATH * 2, L"%lsmindmaze.log", g_dir);
+    swprintf(old, MAX_PATH * 2, L"%lsmindmaze-prev.log", g_dir);
+    DeleteFileW(old);
+    MoveFileExW(now, old, MOVEFILE_REPLACE_EXISTING);
+    if (_wfreopen(now, L"wb", stderr)) {
+        fprintf(stderr, "MindMaze %s started\n", MM_VERSION);
+        fflush(stderr);
+    }
+}
+
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
 {
     (void)prev;
@@ -1237,6 +1250,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
     if (cli.action) {
         char rep[4096];
         int ok = 1;
+        if (cli.prepare) report(0, "progress 1.00 Ready\n");
         if (cli.add_disc) ok = win32_add_disc_quiet(inst, g_datadir, cli.add_disc);
         if (ok && cli.prepare_art) {
             ok = mm_art_prepare(1, rep, sizeof rep);
@@ -1259,6 +1273,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
         }
         return ok ? 0 : 1;
     }
+
+    open_log();
 
     /* built-in art tools (src/art): the sheets are made once, new agent results installed at start */
     {

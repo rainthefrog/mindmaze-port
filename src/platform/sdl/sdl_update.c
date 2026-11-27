@@ -3,10 +3,10 @@
  * At start (unless --no-update-check or update_check=0 in mindmaze.ini) the newest GitHub release is asked for in
  * the background; when it is newer, the player chooses: Update now / Later / Don't ask again. Updating downloads
  * the platform's file and its .sha256, compares the checksum and then:
- *   Linux  MindMaze-linux-x86_64.tar.gz: every file of the tarball's MindMaze/ folder is written next to the program
+ *   Linux  the versioned tarball: every file of its MindMaze/ folder is written next to the program
  *          as <file>.new and renamed over the old one (the running program may be replaced this way); data/,
  *          mindmaze.ini and the player's files are not in the tarball and stay.
- *   macOS  MindMaze-macos.zip: MindMaze.app is unpacked beside the running app as <name>.app.new, the old bundle
+ *   macOS  the versioned zip: MindMaze.app is unpacked beside the running app as <name>.app.new, the old bundle
  *          renamed to <name>.app.old, the new one put in its place, the old one deleted. The data lives outside the
  *          bundle (Application Support).
  * Then the program starts itself again with the same arguments (execv). A read-only folder (a system install, a
@@ -24,12 +24,20 @@
 #include "update.h"
 
 #ifdef __APPLE__
-#define ASSET "MindMaze-macos.zip"
 #define TOP "MindMaze.app/"
 #else
-#define ASSET "MindMaze-linux-x86_64.tar.gz"
 #define TOP "MindMaze/"
 #endif
+
+static void asset_name(const UpdRelease *r, char *out, size_t n)
+{
+    const char *v = r->tag[0] == 'v' ? r->tag + 1 : r->tag;
+#ifdef __APPLE__
+    snprintf(out, n, "MindMaze-%s-macos-universal.zip", v);
+#else
+    snprintf(out, n, "MindMaze-%s-linux-x86_64.tar.gz", v);
+#endif
+}
 
 char **sdl_argv;
 
@@ -173,8 +181,11 @@ static void progress(void *ud, long long now, long long total)
 
 static int install(Job *j)
 {
-    const char *url = upd_asset(&j->r, ASSET), *sumurl = upd_asset(&j->r, ASSET ".sha256");
-    if (!url || !sumurl) { snprintf(j->err, sizeof j->err, "the release %s has no %s with its checksum", j->r.tag, ASSET); return 0; }
+    char asset[160], sumname[168];
+    asset_name(&j->r, asset, sizeof asset);
+    snprintf(sumname, sizeof sumname, "%s.sha256", asset);
+    const char *url = upd_asset(&j->r, asset), *sumurl = upd_asset(&j->r, sumname);
+    if (!url || !sumurl) { snprintf(j->err, sizeof j->err, "the release %s has no %s with its checksum", j->r.tag, asset); return 0; }
     if (!target()) { snprintf(j->err, sizeof j->err, "MindMaze is not running from its app bundle"); return 0; }
 #ifdef __APPLE__
     char parent[1100];
@@ -248,7 +259,8 @@ void sdl_update_offer(const char *json, int manual)
         free(j);
         return;
     }
-    if (!upd_newer(j->r.tag, MM_VERSION) || !upd_asset(&j->r, ASSET)) {
+    char asset[160]; asset_name(&j->r, asset, sizeof asset);
+    if (!upd_newer(j->r.tag, MM_VERSION) || !upd_asset(&j->r, asset)) {
         if (manual) {
             snprintf(msg, sizeof msg, "MindMaze %s is the newest version.", MM_VERSION);
             sdl_ask(0, "MindMaze", msg, "OK", NULL, NULL);
@@ -283,7 +295,8 @@ int sdl_update_cli(void)
     int ok = j && json && upd_parse(json, &j->r);
     free(json);
     if (!ok) { fprintf(stderr, "MindMaze: could not read the newest release from %s\n", url); free(j); return 1; }
-    if (!upd_newer(j->r.tag, MM_VERSION) || !upd_asset(&j->r, ASSET)) {
+    char asset[160]; asset_name(&j->r, asset, sizeof asset);
+    if (!upd_newer(j->r.tag, MM_VERSION) || !upd_asset(&j->r, asset)) {
         printf("MindMaze %s is the newest version.\n", MM_VERSION);
         free(j);
         return 0;

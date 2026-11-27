@@ -412,6 +412,7 @@ static int run_actions(void)
     }
     int ok = sdl_setup(cli.disc, cli.home, 1);
     if (ok) {
+        if (cli.prepare) fputs("progress 1.00 Ready\n", stdout);
         sdl_files_init();
         char rep[4096];
         if (ok && cli.add_disc) ok = sdl_add_disc_headless(cli.add_disc);
@@ -431,6 +432,19 @@ static int run_actions(void)
 
 static int art_prepare_job(void *arg) { char rep[4096]; (void)arg; return mm_art_prepare(0, rep, sizeof rep); }
 static int art_install_job(void *arg) { char rep[4096]; (void)arg; return mm_art_install(rep, sizeof rep); }
+
+static void open_log(void)
+{
+    char now[1200], old[1200];
+    snprintf(now, sizeof now, "%smindmaze.log", sdl_home);
+    snprintf(old, sizeof old, "%smindmaze-prev.log", sdl_home);
+    remove(old);
+    rename(now, old);                                      /* keep the current and previous run only */
+    if (freopen(now, "wb", stderr)) {
+        fprintf(stderr, "MindMaze %s started\n", MM_VERSION);
+        fflush(stderr);
+    }
+}
 
 int main(int argc, char **argv)
 {
@@ -470,6 +484,7 @@ int main(int argc, char **argv)
 
     /* the data folder; on the first start it is built from the player's disc (sdl_setup.c) */
     if (!sdl_setup(source, cli.home, 0) || g_quit_pending) { SDL_Quit(); return 0; }
+    open_log();
     sdl_files_init();
     sdl_audio_init();
 
