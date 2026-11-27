@@ -101,6 +101,9 @@ Proton. A mounted disc is found through Wine's `Z:` drive; otherwise choose the 
 
 ## Quick start (macOS)
 
+> **Testing status:** the universal app is built and code-signature checked on GitHub's macOS runner, but this
+> release has not yet been manually tested on a Mac.
+
 1. Download `MindMaze-<version>-macos-universal.zip` from [Releases](../../releases) and unzip it. The app
    runs on Apple Silicon and Intel Macs, macOS 11 or later.
 2. The app is not signed with an Apple developer ID, so macOS refuses the first double-click. Right-click (or
@@ -189,8 +192,9 @@ write the same data folder.
 3. The data stays in the app; the zip or image can be deleted afterwards. Landscape only.
 
 iPhone: the same app can be built for iOS (Capacitor), but only on a Mac; it would have to be sideloaded (AltStore /
-Sideloadly with an Apple ID). The release workflow performs an unsigned iOS Simulator compile check, but the app is
-not listed as an iOS target or released until it has been tested on a device and a signing/distribution path is chosen.
+Sideloadly with an Apple ID). The release workflow performs an unsigned iOS Simulator compile check, but it has not
+been manually tested in the Simulator or on a device. It is not listed as an iOS target or released until that testing
+and a signing/distribution path are complete.
 
 ## HD and widescreen art (optional)
 
