@@ -35,7 +35,7 @@ jobs:
         run: python3 tools/check_no_content.py
       - name: Tests (synthetic data)
         run: make test
-      - name: Windows exe
+      - name: Windows build
         run: make win32 REPO_URL=https://github.com/${{ github.repository }} APP_VERSION_NAME="${GITHUB_REF_NAME#v}"
       - uses: mymindstorm/setup-emsdk@v14
         with:
@@ -47,6 +47,11 @@ jobs:
           docker build -t mindmaze-port-linux -f docker/linux.Dockerfile tools/
           docker run --rm -v "$PWD:/w" -w /w -u "$(id -u):$(id -g)" mindmaze-port-linux \
             make linux REPO_URL=https://github.com/${{ github.repository }} APP_VERSION_NAME="${GITHUB_REF_NAME#v}"
+      - name: Linux AppImage
+        run: |
+          curl -L --fail -o /tmp/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /tmp/appimagetool
+          make appimage APPIMAGETOOL=/tmp/appimagetool REPO_URL=https://github.com/${{ github.repository }} APP_VERSION_NAME="${GITHUB_REF_NAME#v}"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -74,7 +79,7 @@ jobs:
           test "$got" = "$APK_CERT_SHA256" || { echo "::error::the APK is not signed with the app's key"; exit 1; }
       - name: Checksums for the updaters
         run: |
-          for f in build/win32/MindMaze.exe build/linux/MindMaze-linux-x86_64.tar.gz build/android/MindMaze.apk; do
+          for f in build/win32/MindMaze-*-windows-x86.zip build/linux/MindMaze-*-linux-x86_64.tar.gz build/linux/MindMaze-*-linux-x86_64.AppImage build/android/MindMaze.apk; do
             (cd "$(dirname "$f")" && sha256sum "$(basename "$f")" > "$(basename "$f").sha256")
           done
       - name: GitHub Release
@@ -83,10 +88,12 @@ jobs:
           name: MindMaze ${{ github.ref_name }}
           body_path: docs/release-notes/${{ github.ref_name }}.md
           files: |
-            build/win32/MindMaze.exe
-            build/win32/MindMaze.exe.sha256
-            build/linux/MindMaze-linux-x86_64.tar.gz
-            build/linux/MindMaze-linux-x86_64.tar.gz.sha256
+            build/win32/MindMaze-*-windows-x86.zip
+            build/win32/MindMaze-*-windows-x86.zip.sha256
+            build/linux/MindMaze-*-linux-x86_64.tar.gz
+            build/linux/MindMaze-*-linux-x86_64.tar.gz.sha256
+            build/linux/MindMaze-*-linux-x86_64.AppImage
+            build/linux/MindMaze-*-linux-x86_64.AppImage.sha256
             build/android/MindMaze.apk
             build/android/MindMaze.apk.sha256
 
@@ -107,10 +114,49 @@ jobs:
           make macos REPO_URL=https://github.com/${{ github.repository }}
           lipo -info build/macos/MindMaze.app/Contents/MacOS/MindMaze
           codesign --verify --deep --strict --verbose=2 build/macos/MindMaze.app
-          cd build/macos && shasum -a 256 MindMaze-macos.zip > MindMaze-macos.zip.sha256
+          cd build/macos
+          file=$(echo MindMaze-*-macos-universal.zip)
+          shasum -a 256 "$file" > "$file.sha256"
       - name: Attach to the release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            build/macos/MindMaze-macos.zip
-            build/macos/MindMaze-macos.zip.sha256
+            build/macos/MindMaze-*-macos-universal.zip
+            build/macos/MindMaze-*-macos-universal.zip.sha256
+
+  # Experimental compile check only: no signing, IPA or iOS release until it has been tested on a device.
+  ios-simulator:
+    needs: release
+    runs-on: macos-15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.74
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: WebAssembly engine
+        run: make web REPO_URL=https://github.com/${{ github.repository }}
+      - name: Generate the experimental iOS project
+        run: |
+          rm -rf app/www app/ios
+          mkdir -p app/www
+          cp -R build/web/. app/www/
+          cd app
+          npm ci --no-audit --no-fund
+          npx cap add ios
+          npx cap sync ios
+      - name: Unsigned iOS Simulator build
+        run: |
+          xcodebuild \
+            -workspace app/ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build

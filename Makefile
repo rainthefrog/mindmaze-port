@@ -4,8 +4,9 @@
 #   make test-data DATA=data   the core tests on a folder extracted from an Encarta 2006 disc
 #   make test-extract ISO=...  the built-in C extractor against tools/extract/extract.py on a real disc
 #   make test-qtmusic MAC96=... WINMIDI=...  the Encarta 96 Mac QuickTime music converted and compared with Windows MIDIs
-#   make linux                 build/linux/MindMaze-linux-x86_64.tar.gz (SDL3; in the image of docker/linux.Dockerfile)
-#   make macos                 build/macos/MindMaze-macos.zip (SDL3; on a Mac with Xcode's tools, see release.yml)
+#   make linux                 versioned Linux tarball (SDL3; in the image of docker/linux.Dockerfile)
+#   make appimage              versioned AppImage of that same portable folder
+#   make macos                 versioned universal macOS zip (on a Mac with Xcode's tools, see release.yml)
 #   make web                   build/web/ (WebAssembly engine of the Android app; needs emcc: emscripten/emsdk image)
 #   make android               build/android/MindMaze.apk from build/web (mindmaze-port-android image; run make web first)
 CORE = src/core/mm_util.c src/core/mm_questions.c src/core/mm_rich.c src/core/mm_sources.c src/core/mm_settings.c \
@@ -22,6 +23,7 @@ HEADERS = src/core/mm.h src/core/mm_tables.h src/extract/mx.h src/extract/mx_tab
 REPO_URL ?= https://github.com/OWNER/mindmaze-port
 # the version shown by --version (the release workflow sets it from the tag)
 APP_VERSION_NAME ?= 1.0
+APPIMAGETOOL ?= appimagetool
 # the Android versionCode from the version (1.0.4 -> 1000400, a local test build 1.0.3.8 -> 1000308): always rising, so a
 # release installs over test builds and the updater never offers a "downgrade" Android refuses (2026-11-21)
 APP_VERSION_CODE ?= $(shell echo $(APP_VERSION_NAME) | awk -F. '{ print $$1*1000000 + $$2*10000 + $$3*100 + $$4 }')
@@ -92,7 +94,11 @@ test-extract: build/mmextract
 	python3 -I tools/extract/extract.py "$(ISO)" -o build/x-py --no-iso-hash > /dev/null
 	python3 -I tests/compare_data.py build/x-py build/x-c
 
-win32: build/win32/MindMaze.exe
+WIN_ZIP = MindMaze-$(APP_VERSION_NAME)-windows-x86.zip
+LINUX_TAR = MindMaze-$(APP_VERSION_NAME)-linux-x86_64.tar.gz
+MAC_ZIP = MindMaze-$(APP_VERSION_NAME)-macos-universal.zip
+
+win32: build/win32/MindMaze.exe build/win32/$(WIN_ZIP)
 build/win32/MindMaze.exe: $(CORE) $(EXTRACT) $(WIN32) $(HEADERS) src/core/mm_game.c src/platform/win32/mindmaze.rc \
                           src/platform/win32/mindmaze.ico src/platform/common/cli.h src/platform/common/update.h
 	mkdir -p build/win32
@@ -100,6 +106,10 @@ build/win32/MindMaze.exe: $(CORE) $(EXTRACT) $(WIN32) $(HEADERS) src/core/mm_gam
 	$(MINGW)-gcc $(CFLAGS) -msse2 -mfpmath=sse -municode -mwindows -Isrc/core -Isrc/extract -Isrc/art -Isrc/platform/common $(CORE) src/core/mm_game.c $(EXTRACT) $(WIN32) \
 	  build/win32/mindmaze_res.o -o $@ -static -lwinmm -lgdi32 -lshell32 -lole32 -lwindowscodecs -luuid -lwininet -lcomdlg32
 	$(MINGW)-strip $@
+
+build/win32/$(WIN_ZIP): build/win32/MindMaze.exe recomplauncher.json
+	cp recomplauncher.json build/win32/
+	cd build/win32 && python3 -m zipfile -c $(WIN_ZIP) MindMaze.exe recomplauncher.json
 
 WEB = src/platform/web/web_main.c src/platform/common/text.c src/platform/common/music.c
 WEB_EXPORTS = _main,_malloc,_free,_web_save,_web_activate,_web_text_input,_web_text_value,_web_text_label,_web_start,_web_resize,_web_mouse,_web_key,_web_char,_web_cmd,_web_music_ended,_web_http_done,_web_scale,_web_view_ext,_web_music_render,_web_music_rate,_web_music_state,_web_disc_reading,_web_disc_added,_web_art_installed
@@ -149,9 +159,9 @@ SDL_HEADERS = src/platform/sdl/sdl.h src/platform/common/text.h src/platform/com
 SDL_SRC = $(CORE) src/core/mm_game.c $(EXTRACT) $(SDL)
 SDL_INC = -Isrc/core -Isrc/extract -Isrc/art -Isrc/platform/common
 
-linux: build/linux/MindMaze-linux-x86_64.tar.gz
-build/linux/MindMaze-linux-x86_64.tar.gz: $(SDL_SRC) $(HEADERS) $(SDL_HEADERS) build/soundfonts/GeneralUser-GS.sf2 docs/icon.png \
-                                          src/platform/sdl/README-linux.txt LICENSE
+linux: build/linux/$(LINUX_TAR)
+build/linux/$(LINUX_TAR): $(SDL_SRC) $(HEADERS) $(SDL_HEADERS) build/soundfonts/GeneralUser-GS.sf2 docs/icon.png \
+                                          src/platform/sdl/README-linux.txt LICENSE recomplauncher.json
 	rm -rf build/linux/MindMaze && mkdir -p build/linux/MindMaze/fonts build/linux/MindMaze/soundfonts
 	$(CC) $(CFLAGS) $(SDL_INC) $$(pkg-config --cflags sdl3) $(SDL_SRC) -o build/linux/MindMaze/MindMaze \
 	  -Wl,--as-needed $$(pkg-config --static --libs sdl3) -lm
@@ -161,7 +171,16 @@ build/linux/MindMaze-linux-x86_64.tar.gz: $(SDL_SRC) $(HEADERS) $(SDL_HEADERS) b
 	cp docs/icon.png build/linux/MindMaze/mindmaze.png
 	cp LICENSE build/linux/MindMaze/LICENSE.txt
 	cp src/platform/sdl/README-linux.txt build/linux/MindMaze/README.txt
+	cp recomplauncher.json build/linux/MindMaze/
 	tar -C build/linux -czf $@ MindMaze
+
+appimage: linux
+	rm -rf build/linux/MindMaze.AppDir
+	cp -a build/linux/MindMaze build/linux/MindMaze.AppDir
+	cp packaging/AppRun build/linux/MindMaze.AppDir/AppRun
+	cp packaging/mindmaze.desktop build/linux/MindMaze.AppDir/mindmaze.desktop
+	chmod +x build/linux/MindMaze.AppDir/AppRun
+	APPIMAGE_EXTRACT_AND_RUN=1 $(APPIMAGETOOL) build/linux/MindMaze.AppDir build/linux/MindMaze-$(APP_VERSION_NAME)-linux-x86_64.AppImage
 
 # macOS: universal app (arm64 + x86_64; MACOS_ARCH="-arch arm64" for one), macOS 11 or later. Needs SDL3 built for
 # the same architectures: sh tools/build_sdl3.sh build/sdl3-macos "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
@@ -171,9 +190,9 @@ build/linux/MindMaze-linux-x86_64.tar.gz: $(SDL_SRC) $(HEADERS) $(SDL_HEADERS) b
 # invalidate it (macOS then calls the app "damaged"), so the finished bundle is signed ad-hoc once more.
 MACOS_ARCH ?= -arch arm64 -arch x86_64
 MACOS_APP = build/macos/MindMaze.app
-macos: build/macos/MindMaze-macos.zip
-build/macos/MindMaze-macos.zip: $(SDL_SRC) $(HEADERS) $(SDL_HEADERS) build/soundfonts/GeneralUser-GS.sf2 docs/icon.png \
-                                src/platform/sdl/Info.plist LICENSE
+macos: build/macos/$(MAC_ZIP)
+build/macos/$(MAC_ZIP): $(SDL_SRC) $(HEADERS) $(SDL_HEADERS) build/soundfonts/GeneralUser-GS.sf2 docs/icon.png \
+                                src/platform/sdl/Info.plist LICENSE recomplauncher.json
 	rm -rf $(MACOS_APP) build/macos/MindMaze.iconset $@
 	mkdir -p $(MACOS_APP)/Contents/MacOS $(MACOS_APP)/Contents/Resources/fonts $(MACOS_APP)/Contents/Resources/soundfonts \
 	         build/macos/MindMaze.iconset
@@ -190,9 +209,10 @@ build/macos/MindMaze-macos.zip: $(SDL_SRC) $(HEADERS) $(SDL_HEADERS) build/sound
 	cp build/soundfonts/GeneralUser-GS.sf2 soundfonts/LICENSE-GeneralUser-GS.txt $(MACOS_APP)/Contents/Resources/soundfonts/
 	cp LICENSE $(MACOS_APP)/Contents/Resources/LICENSE.txt
 	codesign --force --sign - $(MACOS_APP)
-	cd build/macos && ditto -c -k --keepParent MindMaze.app MindMaze-macos.zip
+	cp recomplauncher.json build/macos/
+	cd build/macos && python3 -m zipfile -c $(MAC_ZIP) MindMaze.app recomplauncher.json
 
 clean:
 	rm -rf build
 
-.PHONY: all test test-data test-qtmusic test-extract win32 web android linux macos clean art-text
+.PHONY: all test test-data test-qtmusic test-extract win32 web android linux appimage macos clean art-text

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "Microsoft Encarta MindMaze",
+  "system": "PC (Windows)",
+  "type": "port",
+  "original": {
+    "region": "USA",
+    "revision": "Encarta 2006 Premium"
+  },
+  "project": "mindmaze-port",
+  "status": "released",
+  "targets": ["Windows", "Linux", "macOS", "Steam Deck", "Android"],
+  "approach": "Open-source C reimplementation based on reverse engineering of the original Windows game.",
+  "maintainers": [
+    {
+      "name": "rainthefrog",
+      "link": "https://github.com/rainthefrog"
+    }
+  ],
+  "links": [
+    {
+      "label": "RecompLauncher",
+      "url": "https://recomplauncher.com"
+    }
+  ],
+  "launchers": [
+    {
+      "path": "recomplauncher.json",
+      "in": "repo",
+      "format": "RecompLauncher"
+    },
+    {
+      "path": "recomplauncher.json",
+      "in": "release",
+      "format": "RecompLauncher"
+    }
+  ],
+  "tags": ["trivia", "reverse-engineering", "SDL3"],
+  "notes": "Faithful implementation of Encarta 2006 MindMaze with support for content from US English Encarta 95-98 and 2006 editions."
+}

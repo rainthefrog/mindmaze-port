@@ -2,7 +2,7 @@
   "name": "mindmaze-port-app",
   "private": true,
   "version": "1.0.0",
-  "description": "Android app of mindmaze-port: the WebAssembly build of the game in a Capacitor WebView",
+  "description": "Mobile app of mindmaze-port: the WebAssembly build of the game in a Capacitor WebView",
   "license": "MIT",
   "scripts": {
     "sync": "cap sync android"
@@ -10,7 +10,8 @@
   "dependencies": {
     "@capacitor/android": "6.2.0",
     "@capacitor/app": "6.0.3",
-    "@capacitor/core": "6.2.0"
+    "@capacitor/core": "6.2.0",
+    "@capacitor/ios": "6.2.0"
   },
   "devDependencies": {
     "@capacitor/cli": "6.2.0"

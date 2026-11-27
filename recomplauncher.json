@@ -1,0 +1,110 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "name": "MindMaze",
+  "inputs": [
+    {
+      "id": "game",
+      "label": "Your US English Encarta 95, 96, 97, 98, or 2006 disc image (.iso), mounted disc folder, ENCARTA.EXE, or MINDMAZE.DB",
+      "formats": [
+        { "type": "file", "extensions": ["iso", "exe", "db"] },
+        { "type": "folder" }
+      ]
+    }
+  ],
+  "start": {
+    "program": ["MindMaze.exe", "MindMaze-x86_64.AppImage", "MindMaze", "MindMaze.app"],
+    "args": ["--home", "{data}", "--no-update-check"]
+  },
+  "prepare": {
+    "program": ["MindMaze.exe", "MindMaze-x86_64.AppImage", "MindMaze", "MindMaze.app"],
+    "args": ["--prepare", "--home", "{data}", "--disc={input:game}"],
+    "label": "Pictures, sounds, music, and questions from your Encarta disc",
+    "done": ["{data}/data/tables.json"],
+    "keeps_copy": true
+  },
+  "config": [
+    {
+      "format": "ini",
+      "file": [{ "path": "{data}/mindmaze.ini" }],
+      "new": {
+        "update_check": "0"
+      }
+    }
+  ],
+  "folders": {
+    "game": [{ "path": "{data}/data" }],
+    "logs": [{ "path": "{data}" }]
+  },
+  "saves": [
+    "{data}/mindmaze.ini",
+    "{data}/savegame.txt",
+    "{data}/stats.txt",
+    "{data}/seen.txt",
+    "{data}/custom_questions.json",
+    "{data}/online_questions.json"
+  ],
+  "settings": [
+    {
+      "id": "music",
+      "label": "Music",
+      "group": "Audio",
+      "choices": [
+        { "label": "On", "set": { "Music": "1" } },
+        { "label": "Off", "set": { "Music": "0" } }
+      ],
+      "defaults": { "Music": "1" }
+    },
+    {
+      "id": "music_volume",
+      "label": "Music volume",
+      "group": "Audio",
+      "slider": { "key": "MusicVolume", "min": 0, "max": 100, "step": 5, "format": "%.0f" },
+      "defaults": { "MusicVolume": "100" }
+    },
+    {
+      "id": "sound",
+      "label": "Sound effects",
+      "group": "Audio",
+      "choices": [
+        { "label": "On", "set": { "Sound": "1" } },
+        { "label": "Off", "set": { "Sound": "0" } }
+      ],
+      "defaults": { "Sound": "1" }
+    },
+    {
+      "id": "sound_volume",
+      "label": "Sound effects volume",
+      "group": "Audio",
+      "slider": { "key": "SoundVolume", "min": 0, "max": 100, "step": 5, "format": "%.0f" },
+      "defaults": { "SoundVolume": "100" }
+    },
+    {
+      "id": "modern",
+      "label": "Modern play options",
+      "group": "Gameplay",
+      "help": "Adds resume support, hints, turn prompts, and animations while keeping the original game rules.",
+      "choices": [
+        {
+          "label": "On",
+          "set": { "opt_resume": "1", "opt_hints": "1", "opt_prompts": "1", "opt_anim": "1", "opt_layout": "0" }
+        },
+        {
+          "label": "Classic",
+          "set": { "opt_resume": "0", "opt_hints": "0", "opt_prompts": "0", "opt_anim": "0", "opt_layout": "1", "opt_bigtext": "0" }
+        }
+      ],
+      "defaults": { "opt_resume": "1", "opt_hints": "1", "opt_prompts": "1", "opt_anim": "1", "opt_layout": "0" }
+    },
+    {
+      "id": "skip_seen",
+      "label": "Skip questions already seen",
+      "group": "Gameplay",
+      "choices": [
+        { "label": "Off", "set": { "skip_seen": "0" } },
+        { "label": "On", "set": { "skip_seen": "1" } }
+      ],
+      "defaults": { "skip_seen": "0" }
+    }
+  ]
+}

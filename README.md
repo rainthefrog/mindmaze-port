@@ -7,6 +7,8 @@ Open-source port of **MindMaze** (also written *Mind Maze*), the castle trivia g
 > This repository contains no Microsoft content: the pictures, sounds, music, questions and texts are read
 > from **your own copy** of an Encarta disc by the extraction tool.
 
+<a href="https://recomplauncher.com"><picture><source media="(prefers-color-scheme: dark)" srcset="https://recomplauncher.com/assets/press/launcher/badge-light.svg"><img alt="Get it on RecompLauncher" src="https://recomplauncher.com/assets/press/launcher/badge-dark.svg" height="48"></picture></a>
+
 ![A room in the castle, with the panel (screenshot of the maintainer's own copy)](docs/screenshot.png)
 
 *Screenshot of the game running with data extracted from the maintainer's own Encarta 2006 disc.
@@ -69,8 +71,8 @@ disc, please open an issue with its message.
 
 ## Quick start (Windows)
 
-1. Download `MindMaze.exe` from [Releases](../../releases). That is the whole download; nothing else needs to be
-   installed. It is not signed, so Windows SmartScreen warns once ("More info" -> "Run anyway").
+1. Download `MindMaze-<version>-windows-x86.zip` from [Releases](../../releases), unzip it, and start
+   `MindMaze.exe`. Nothing needs to be installed. It is not signed, so Windows SmartScreen may warn once.
 2. Start it. On the first start it looks for an inserted or mounted Encarta disc; if there is none it asks
    for the disc image (`.iso`), or for `ENCARTA.EXE` (2006) or `MINDMAZE.DB` (95 to 98) on the disc.
 3. It copies what the game needs into a `data` folder next to the exe (or `%LOCALAPPDATA%\MindMaze` when the
@@ -81,8 +83,8 @@ castle-gate page, the gear in the top right corner of a room, or MindMaze menu >
 
 ## Quick start (Linux)
 
-1. Download `MindMaze-linux-x86_64.tar.gz` from [Releases](../../releases) and unpack it (`tar xzf
-   MindMaze-linux-x86_64.tar.gz`). Nothing needs to be installed: it runs on Ubuntu 22.04 or later, SteamOS, Debian 12,
+1. Download `MindMaze-<version>-linux-x86_64.tar.gz` from [Releases](../../releases) and unpack it. An AppImage of
+   the same portable folder is also provided. Nothing needs to be installed: it runs on Ubuntu 22.04 or later, SteamOS, Debian 12,
    Fedora and other x86_64 desktops (X11 or Wayland).
 2. Start `MindMaze/MindMaze`. On the first start it looks for a mounted Encarta disc (`/media`, `/run/media`, `/mnt`);
    if there is none it asks for the disc image (`.iso`), or for `ENCARTA.EXE` / `MINDMAZE.DB` on the disc. You can
@@ -99,7 +101,7 @@ Proton. A mounted disc is found through Wine's `Z:` drive; otherwise choose the 
 
 ## Quick start (macOS)
 
-1. Download `MindMaze-macos.zip` from [Releases](../../releases) and unzip it (Safari does this by itself). The app
+1. Download `MindMaze-<version>-macos-universal.zip` from [Releases](../../releases) and unzip it. The app
    runs on Apple Silicon and Intel Macs, macOS 11 or later.
 2. The app is not signed with an Apple developer ID, so macOS refuses the first double-click. Right-click (or
    Control-click) `MindMaze.app` > **Open** > **Open**; on macOS 15 and later instead open it once, then System
@@ -128,6 +130,7 @@ Everything works from the game itself; the flags are for launchers and scripts. 
 | `--set <key>=<value>` | any `mindmaze.ini` setting |
 | `--home <dir>` | keep everything (`data/`, `mindmaze.ini`, players) in `<dir>` |
 | `--disc <path>` or just `<path>` | first start: the Encarta disc image, folder or a file on it; no questions asked |
+| `--prepare` | extract `--disc` into `--home` without opening a game window, then exit |
 | `--add-disc <path>` | add the questions of another Encarta disc |
 | `--export <file.zip>` | write the data file for the phone app |
 | `--prepare-art`, `--install-art` | write the HD / widescreen kit again; install finished pictures |
@@ -167,6 +170,9 @@ starts again; your data, players and settings stay. **Later** asks again next ti
 If the program's folder is read-only (e.g. `C:\Program Files`), MindMaze opens the release page instead.
 Launchers that update the game themselves start it with `--no-update-check`.
 
+The desktop builds keep `mindmaze.log` and `mindmaze-prev.log` with the settings and player files. These contain
+diagnostic output from the two most recent runs and can be attached to bug reports.
+
 For developers there is also a Python version of the extractor (`tools/extract/extract.py`, needs 7-Zip); both
 write the same data folder.
 
@@ -183,7 +189,8 @@ write the same data folder.
 3. The data stays in the app; the zip or image can be deleted afterwards. Landscape only.
 
 iPhone: the same app can be built for iOS (Capacitor), but only on a Mac; it would have to be sideloaded (AltStore /
-Sideloadly with an Apple ID). Not released yet.
+Sideloadly with an Apple ID). The release workflow performs an unsigned iOS Simulator compile check, but the app is
+not listed as an iOS target or released until it has been tested on a device and a signing/distribution path is chosen.
 
 ## HD and widescreen art (optional)
 
@@ -224,9 +231,9 @@ docker run --rm -v "$PWD:/w" -w /w mindmaze-port-dev make test win32
 |---|---|
 | `make test` | core tests on synthetic fixtures (no Encarta files needed) + extractor tests |
 | `make test-data DATA=data` | the same core tests on your extracted data |
-| `make win32` | `build/win32/MindMaze.exe` (mingw-w64 cross build) |
-| `make linux` | `build/linux/MindMaze-linux-x86_64.tar.gz` (SDL3 linked in; in the image of `docker/linux.Dockerfile`, see below) |
-| `make macos` | `build/macos/MindMaze-macos.zip` (universal app; on a Mac with SDL3 from `tools/build_sdl3.sh`, see `.github/workflows/release.yml`) |
+| `make win32` | versioned Windows ZIP containing the portable `MindMaze.exe` |
+| `make linux`, `make appimage` | versioned Linux tarball and AppImage (SDL3 linked in) |
+| `make macos` | versioned universal macOS ZIP (on a Mac with SDL3 from `tools/build_sdl3.sh`) |
 | `make web`, `make android` | `build/web/` (WebAssembly engine) and `build/android/MindMaze.apk` |
 
 The Linux build runs in an Ubuntu 22.04 image with SDL3 built from source (so the program also runs on older

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=MindMaze
+Exec=MindMaze
+Icon=mindmaze
+Categories=Game;
+Terminal=false

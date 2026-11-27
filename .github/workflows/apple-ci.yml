@@ -1,0 +1,62 @@
+name: Apple builds
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apple-ci.yml"
+      - ".github/workflows/release.yml"
+      - "app/**"
+      - "src/**"
+      - "tools/build_sdl3.sh"
+      - "Makefile"
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: SDL3 (static library, universal arm64 + x86_64)
+        run: |
+          command -v pkg-config >/dev/null || brew install pkgconf
+          sh tools/build_sdl3.sh build/sdl3-macos "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+      - name: Universal MindMaze.app
+        run: |
+          export PKG_CONFIG_PATH="$PWD/build/sdl3-macos/lib/pkgconfig"
+          make macos REPO_URL=https://github.com/${{ github.repository }} APP_VERSION_NAME=ci
+          lipo -info build/macos/MindMaze.app/Contents/MacOS/MindMaze
+          codesign --verify --deep --strict --verbose=2 build/macos/MindMaze.app
+
+  ios-simulator:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.74
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: WebAssembly engine
+        run: make web REPO_URL=https://github.com/${{ github.repository }}
+      - name: Generate the experimental iOS project
+        run: |
+          rm -rf app/www app/ios
+          mkdir -p app/www
+          cp -R build/web/. app/www/
+          cd app
+          npm ci --no-audit --no-fund
+          npx cap add ios
+          npx cap sync ios
+      - name: Unsigned iOS Simulator build
+        run: |
+          xcodebuild \
+            -workspace app/ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
